@@ -13,6 +13,6 @@ test = { cmd = "bash -c 'bash build_and_run.sh test_pg.mojo; RET=$?; exit $RET'"
 format = "mblack pg.mojo test_pg.mojo"
 
 [dependencies]
-mojo = ">=0.26.1"
+mojo = ">=0.26.2"
 libpq = "*"
 postgresql = "*"

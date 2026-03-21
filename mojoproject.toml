@@ -6,7 +6,7 @@ license = "MIT"
 platforms = ["linux-64"]
 
 [mojo]
-requires = ">=0.26.1"
+requires = ">=0.26.2"
 
 [c-dependencies]
 pg_wrapper = "pg_wrapper.c"
