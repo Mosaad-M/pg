@@ -1,0 +1,18 @@
+[workspace]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "pg"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+compile-pg = "gcc -shared -fPIC -o libpg_wrapper.so pg_wrapper.c -L.pixi/envs/default/lib -lpq -I.pixi/envs/default/include -Wl,-rpath,'$ORIGIN/.pixi/envs/default/lib'"
+init-db = "bash -c 'if [ ! -d .pgdata ]; then initdb -D .pgdata --no-locale --encoding=UTF8 && echo \"unix_socket_directories = '.'\" >> .pgdata/postgresql.conf && echo \"port = 15432\" >> .pgdata/postgresql.conf; fi'"
+start-db = { cmd = "bash -c 'pg_isready -h localhost -p 15432 2>/dev/null || pg_ctl -D .pgdata -l .pgdata/logfile start -o \"-k $(pwd)\" && sleep 1 && (psql -h localhost -p 15432 -d postgres -c \"SELECT 1\" 2>/dev/null || createdb -h localhost -p 15432 mojo_test)'", depends-on = ["init-db"] }
+stop-db = "pg_ctl -D .pgdata stop 2>/dev/null; true"
+test = { cmd = "bash -c 'bash build_and_run.sh test_pg.mojo; RET=$?; exit $RET'", depends-on = ["compile-pg", "start-db"] }
+format = "mblack pg.mojo test_pg.mojo"
+
+[dependencies]
+mojo = ">=0.26.1"
+libpq = "*"
+postgresql = "*"

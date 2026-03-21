@@ -1,0 +1,8 @@
+.pgdata/
+.build/
+*.so
+*.dylib
+*.o
+pixi.lock
+.pixi/
+__pycache__/

@@ -1,0 +1,12 @@
+[package]
+name = "pg"
+version = "1.0.0"
+description = "Pure-Mojo PostgreSQL client"
+license = "MIT"
+platforms = ["linux-64"]
+
+[mojo]
+requires = ">=0.26.1"
+
+[c-dependencies]
+pg_wrapper = "pg_wrapper.c"
