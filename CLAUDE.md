@@ -11,8 +11,7 @@ Native Mojo PostgreSQL client via libpq FFI. Same pattern as tls/ssl_wrapper.c: 
 | `pg.mojo` | PgConnection + PgResult structs |
 | `pg_wrapper.c` | C shim around libpq (13 functions) |
 | `test_pg.mojo` | 9 integration tests |
-| `.build_tools/c++` | Linker wrapper injecting -lpg_wrapper |
-| `build_and_run.sh` | Build helper (mojo build + run) |
+| `build_and_run.sh` | Build helper (uses -Xlinker flags for mojo build + run) |
 
 ## Build & Run
 
@@ -46,12 +45,12 @@ conn.close()    # Close connection
 
 - **Port 15432** — avoids conflict with any system PostgreSQL on default 5432
 - **Trust auth** — test DB uses local trust (no password needed)
-- **C string reading** — uses `strlen` + `memcpy` + manual byte copy (no UnsafePointer address constructor in Mojo 0.25.7)
+- **C string reading** — uses `strlen` + `memcpy` + manual byte copy
 - **All values as String** — matches libpq's PQgetvalue which always returns text
-- **Separate .build_tools** — pg has its own linker wrapper (links -lpg_wrapper, not -lssl_wrapper)
+- **-Xlinker flags** — `build_and_run.sh` uses `-Xlinker -lpg_wrapper` (PATH-based c++ wrapper not used in Mojo 0.26+)
 
 ## Dependencies
 
 - `libpq` from conda-forge (installed via pixi)
 - `postgresql` from conda-forge (for test DB server)
-- `mojo 0.25.7`
+- `mojo >=0.26.1`
