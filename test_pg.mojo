@@ -16,17 +16,17 @@ from pg import PgConnection, PgResult
 alias CONNINFO = "host=localhost port=15432 dbname=mojo_test"
 
 
-fn assert_true(cond: Bool, label: String) raises:
+def assert_true(cond: Bool, label: String) raises:
     if not cond:
         raise Error(label + ": expected True, got False")
 
 
-fn assert_eq(actual: String, expected: String, label: String) raises:
+def assert_eq(actual: String, expected: String, label: String) raises:
     if actual != expected:
         raise Error(label + ": expected '" + expected + "', got '" + actual + "'")
 
 
-fn assert_int_eq(actual: Int, expected: Int, label: String) raises:
+def assert_int_eq(actual: Int, expected: Int, label: String) raises:
     if actual != expected:
         raise Error(
             label + ": expected " + String(expected) + ", got " + String(actual)
@@ -38,13 +38,13 @@ fn assert_int_eq(actual: Int, expected: Int, label: String) raises:
 # ============================================================================
 
 
-fn test_connect() raises:
+def test_connect() raises:
     """Connect and disconnect."""
     var conn = PgConnection.connect(CONNINFO)
     conn.close()
 
 
-fn test_connect_bad_conninfo() raises:
+def test_connect_bad_conninfo() raises:
     """Bad connection string raises error."""
     var got_error = False
     try:
@@ -55,7 +55,7 @@ fn test_connect_bad_conninfo() raises:
     assert_true(got_error, "bad conninfo should raise")
 
 
-fn test_select_one() raises:
+def test_select_one() raises:
     """SELECT 1 returns correct value."""
     var conn = PgConnection.connect(CONNINFO)
     var result = conn.exec("SELECT 1 AS num")
@@ -68,7 +68,7 @@ fn test_select_one() raises:
     conn.close()
 
 
-fn test_create_insert_query_drop() raises:
+def test_create_insert_query_drop() raises:
     """Full lifecycle: CREATE TABLE, INSERT, SELECT, DROP."""
     var conn = PgConnection.connect(CONNINFO)
 
@@ -104,7 +104,7 @@ fn test_create_insert_query_drop() raises:
     conn.close()
 
 
-fn test_null_values() raises:
+def test_null_values() raises:
     """NULL values detected correctly."""
     var conn = PgConnection.connect(CONNINFO)
 
@@ -125,7 +125,7 @@ fn test_null_values() raises:
     conn.close()
 
 
-fn test_multiple_queries() raises:
+def test_multiple_queries() raises:
     """Execute multiple queries on same connection."""
     var conn = PgConnection.connect(CONNINFO)
 
@@ -144,7 +144,7 @@ fn test_multiple_queries() raises:
     conn.close()
 
 
-fn test_bad_query() raises:
+def test_bad_query() raises:
     """Invalid SQL raises error."""
     var conn = PgConnection.connect(CONNINFO)
     var got_error = False
@@ -157,7 +157,7 @@ fn test_bad_query() raises:
     conn.close()
 
 
-fn test_multi_row_query() raises:
+def test_multi_row_query() raises:
     """Query returning multiple rows."""
     var conn = PgConnection.connect(CONNINFO)
 
@@ -170,7 +170,7 @@ fn test_multi_row_query() raises:
     conn.close()
 
 
-fn test_data_types() raises:
+def test_data_types() raises:
     """Various PostgreSQL data types returned as strings."""
     var conn = PgConnection.connect(CONNINFO)
 
@@ -193,15 +193,15 @@ fn test_data_types() raises:
 # ============================================================================
 
 
-fn main() raises:
+def main() raises:
     var passed = 0
     var failed = 0
 
-    fn run_test(
+    def run_test(
         name: String,
         mut passed: Int,
         mut failed: Int,
-        test_fn: fn () raises -> None,
+        test_fn: def () raises -> None,
     ):
         try:
             test_fn()

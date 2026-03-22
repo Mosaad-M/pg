@@ -36,67 +36,67 @@ alias PGRES_TUPLES_OK = 2
 # ============================================================================
 
 
-fn _pg_connect(conninfo: UnsafePointer[Int8]) -> Int:
+def _pg_connect(conninfo: UnsafePointer[Int8, _]) -> Int:
     """PQconnectdb(conninfo) -> PGconn*."""
     return external_call["mojo_pg_connect", Int](Int(conninfo))
 
 
-fn _pg_status(conn: Int) -> Int32:
+def _pg_status(conn: Int) -> Int32:
     """PQstatus(conn) -> ConnStatusType."""
     return external_call["mojo_pg_status", Int32](conn)
 
 
-fn _pg_error_message(conn: Int) -> Int:
+def _pg_error_message(conn: Int) -> Int:
     """PQerrorMessage(conn) -> const char*."""
     return external_call["mojo_pg_error_message", Int](conn)
 
 
-fn _pg_finish(conn: Int):
+def _pg_finish(conn: Int):
     """PQfinish(conn)."""
     external_call["mojo_pg_finish", NoneType](conn)
 
 
-fn _pg_exec(conn: Int, query: UnsafePointer[Int8]) -> Int:
+def _pg_exec(conn: Int, query: UnsafePointer[Int8, _]) -> Int:
     """PQexec(conn, query) -> PGresult*."""
     return external_call["mojo_pg_exec", Int](conn, Int(query))
 
 
-fn _pg_result_status(result: Int) -> Int32:
+def _pg_result_status(result: Int) -> Int32:
     """PQresultStatus(result) -> ExecStatusType."""
     return external_call["mojo_pg_result_status", Int32](result)
 
 
-fn _pg_result_error_message(result: Int) -> Int:
+def _pg_result_error_message(result: Int) -> Int:
     """PQresultErrorMessage(result) -> const char*."""
     return external_call["mojo_pg_result_error_message", Int](result)
 
 
-fn _pg_ntuples(result: Int) -> Int32:
+def _pg_ntuples(result: Int) -> Int32:
     """PQntuples(result) -> int."""
     return external_call["mojo_pg_ntuples", Int32](result)
 
 
-fn _pg_nfields(result: Int) -> Int32:
+def _pg_nfields(result: Int) -> Int32:
     """PQnfields(result) -> int."""
     return external_call["mojo_pg_nfields", Int32](result)
 
 
-fn _pg_fname(result: Int, col: Int32) -> Int:
+def _pg_fname(result: Int, col: Int32) -> Int:
     """PQfname(result, col) -> const char*."""
     return external_call["mojo_pg_fname", Int](result, col)
 
 
-fn _pg_getvalue(result: Int, row: Int32, col: Int32) -> Int:
+def _pg_getvalue(result: Int, row: Int32, col: Int32) -> Int:
     """PQgetvalue(result, row, col) -> const char*."""
     return external_call["mojo_pg_getvalue", Int](result, row, col)
 
 
-fn _pg_getisnull(result: Int, row: Int32, col: Int32) -> Int32:
+def _pg_getisnull(result: Int, row: Int32, col: Int32) -> Int32:
     """PQgetisnull(result, row, col) -> int."""
     return external_call["mojo_pg_getisnull", Int32](result, row, col)
 
 
-fn _pg_clear(result: Int):
+def _pg_clear(result: Int):
     """PQclear(result)."""
     external_call["mojo_pg_clear", NoneType](result)
 
@@ -106,7 +106,7 @@ fn _pg_clear(result: Int):
 # ============================================================================
 
 
-fn _strlen(ptr: Int) -> Int:
+def _strlen(ptr: Int) -> Int:
     """Get length of a C string via strlen.
 
     Args:
@@ -118,7 +118,7 @@ fn _strlen(ptr: Int) -> Int:
     return external_call["strlen", Int](ptr)
 
 
-fn _cstr_to_string(ptr: Int) -> String:
+def _cstr_to_string(ptr: Int) -> String:
     """Convert a C string pointer to a Mojo String.
 
     Args:
@@ -156,7 +156,7 @@ struct PgResult(Movable):
 
     var _result: Int  # PGresult* as opaque pointer
 
-    fn __init__(out self, result_ptr: Int):
+    def __init__(out self, result_ptr: Int):
         """Create from raw PGresult pointer.
 
         Args:
@@ -164,10 +164,10 @@ struct PgResult(Movable):
         """
         self._result = result_ptr
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self._result = take._result
 
-    fn num_rows(self) -> Int:
+    def num_rows(self) -> Int:
         """Number of rows in result.
 
         Returns:
@@ -175,7 +175,7 @@ struct PgResult(Movable):
         """
         return Int(_pg_ntuples(self._result))
 
-    fn num_cols(self) -> Int:
+    def num_cols(self) -> Int:
         """Number of columns in result.
 
         Returns:
@@ -183,7 +183,7 @@ struct PgResult(Movable):
         """
         return Int(_pg_nfields(self._result))
 
-    fn field_name(self, col: Int) -> String:
+    def field_name(self, col: Int) -> String:
         """Get column name by index.
 
         Args:
@@ -195,7 +195,7 @@ struct PgResult(Movable):
         var ptr = _pg_fname(self._result, Int32(col))
         return _cstr_to_string(ptr)
 
-    fn get_value(self, row: Int, col: Int) -> String:
+    def get_value(self, row: Int, col: Int) -> String:
         """Get cell value as string.
 
         Args:
@@ -208,7 +208,7 @@ struct PgResult(Movable):
         var ptr = _pg_getvalue(self._result, Int32(row), Int32(col))
         return _cstr_to_string(ptr)
 
-    fn is_null(self, row: Int, col: Int) -> Bool:
+    def is_null(self, row: Int, col: Int) -> Bool:
         """Check if cell is NULL.
 
         Args:
@@ -220,7 +220,7 @@ struct PgResult(Movable):
         """
         return _pg_getisnull(self._result, Int32(row), Int32(col)) == 1
 
-    fn clear(mut self):
+    def clear(mut self):
         """Free the PGresult. Must be called when done."""
         if self._result != 0:
             _pg_clear(self._result)
@@ -245,15 +245,15 @@ struct PgConnection(Movable):
 
     var _conn: Int  # PGconn* as opaque pointer
 
-    fn __init__(out self):
+    def __init__(out self):
         """Create unconnected instance."""
         self._conn = 0
 
-    fn __moveinit__(out self, deinit take: Self):
+    def __moveinit__(out self, deinit take: Self):
         self._conn = take._conn
 
     @staticmethod
-    fn connect(conninfo: String) raises -> PgConnection:
+    def connect(conninfo: String) raises -> PgConnection:
         """Connect to PostgreSQL.
 
         Args:
@@ -283,7 +283,7 @@ struct PgConnection(Movable):
         result._conn = conn_ptr
         return result^
 
-    fn exec(self, query: String) raises -> PgResult:
+    def exec(self, query: String) raises -> PgResult:
         """Execute a SQL query.
 
         Args:
@@ -316,7 +316,7 @@ struct PgConnection(Movable):
 
         return PgResult(result_ptr)
 
-    fn close(mut self):
+    def close(mut self):
         """Close the connection. Safe to call multiple times."""
         if self._conn != 0:
             _pg_finish(self._conn)
