@@ -193,6 +193,20 @@ def test_data_types() raises:
 # ============================================================================
 
 
+def test_sslmode_parsed() raises:
+    """sslmode=require triggers TLS code path; fails on non-TLS server."""
+    var got_error = False
+    try:
+        var conn = PgConnection.connect(
+            "host=localhost port=15432 dbname=mojo_test sslmode=require"
+        )
+        conn.close()
+    except e:
+        # Expected: TLS handshake fails because local test DB has no TLS cert.
+        got_error = True
+    assert_true(got_error, "sslmode=require should fail on non-TLS server")
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -224,6 +238,7 @@ def main() raises:
     run_test("bad query", passed, failed, test_bad_query)
     run_test("multi-row query", passed, failed, test_multi_row_query)
     run_test("data types", passed, failed, test_data_types)
+    run_test("sslmode parsed", passed, failed, test_sslmode_parsed)
 
     print()
     print(

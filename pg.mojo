@@ -6,7 +6,7 @@
 # over TCP, with no C shim and no libpq dependency.
 #
 # Supported auth methods: trust, cleartext password, MD5 password.
-# TLS (sslmode=require) is deferred; connect via plain TCP only.
+# Supported TLS: sslmode=require or sslmode=verify-full uses TlsSocket.
 #
 # Public API (unchanged from libpq version):
 #   var conn = PgConnection.connect("host=localhost port=15432 dbname=mydb")
@@ -21,6 +21,7 @@
 from std.ffi import external_call
 from std.memory.unsafe_pointer import alloc, UnsafePointer
 from tcp import TcpSocket
+from tls.socket import TlsSocket, load_system_ca_bundle
 
 
 # ============================================================================
@@ -322,6 +323,7 @@ struct ConnParams(Movable):
     var dbname: String
     var user: String
     var password: String
+    var sslmode: String  # "disable" | "require" | "verify-full"
 
     def __init__(out self):
         self.host = String("localhost")
@@ -330,6 +332,7 @@ struct ConnParams(Movable):
         self.dbname = os_user.copy()
         self.user = os_user^
         self.password = String("")
+        self.sslmode = String("disable")
 
     def __moveinit__(out self, deinit take: Self):
         self.host = take.host^
@@ -337,6 +340,7 @@ struct ConnParams(Movable):
         self.dbname = take.dbname^
         self.user = take.user^
         self.password = take.password^
+        self.sslmode = take.sslmode^
 
 
 def _parse_conninfo(conninfo: String) raises -> ConnParams:
@@ -393,7 +397,9 @@ def _parse_conninfo(conninfo: String) raises -> ConnParams:
             params.user = value^
         elif key == "password":
             params.password = value^
-        # unknown keys (connect_timeout, sslmode, etc.) silently ignored
+        elif key == "sslmode":
+            params.sslmode = value^
+        # other unknown keys silently ignored
 
     return params^
 
@@ -478,22 +484,37 @@ struct PgConnection(Movable):
     """
 
     var _tcp: TcpSocket
+    var _tls: TlsSocket
+    var _use_tls: Bool
     var _connected: Bool
 
     def __init__(out self):
         self._tcp = TcpSocket()
+        self._tls = TlsSocket()
+        self._use_tls = False
         self._connected = False
 
     def __moveinit__(out self, deinit take: Self):
         self._tcp = take._tcp^
+        self._tls = take._tls^
+        self._use_tls = take._use_tls
         self._connected = take._connected
 
     # -------------------------------------------------------------------------
     # Internal: raw I/O
     # -------------------------------------------------------------------------
 
-    def _send_bytes(self, data: List[UInt8]) raises:
+    def _send_bytes(mut self, data: List[UInt8]) raises:
         """Write all bytes in data to the socket."""
+        if self._use_tls:
+            var sent = 0
+            while sent < len(data):
+                var chunk = List[UInt8]()
+                for i in range(sent, len(data)):
+                    chunk.append(data[i])
+                var n = self._tls.send(chunk)
+                sent += n
+            return
         var n = len(data)
         if n == 0:
             return
@@ -511,12 +532,16 @@ struct PgConnection(Movable):
             sent_total += sent
         buf.free()
 
-    def _recv_msg(self) raises -> Tuple[UInt8, List[UInt8]]:
+    def _recv_msg(mut self) raises -> Tuple[UInt8, List[UInt8]]:
         """Read one backend message: (type_byte, body_bytes).
 
         Format: 1 byte type | 4 bytes big-endian length (includes itself) | body
         """
-        var header = self._tcp.recv_bytes_exact(5)
+        var header: List[UInt8]
+        if self._use_tls:
+            header = self._tls.recv_exact(5)
+        else:
+            header = self._tcp.recv_bytes_exact(5)
         var msg_type = header[0]
         var length = Int(_read_i32(header, 1))
         var body_len = length - 4
@@ -524,14 +549,17 @@ struct PgConnection(Movable):
             raise Error("pg: invalid message length: " + String(length))
         var body = List[UInt8]()
         if body_len > 0:
-            body = self._tcp.recv_bytes_exact(body_len)
+            if self._use_tls:
+                body = self._tls.recv_exact(body_len)
+            else:
+                body = self._tcp.recv_bytes_exact(body_len)
         return (msg_type, body^)
 
     # -------------------------------------------------------------------------
     # Internal: protocol messages sent by client
     # -------------------------------------------------------------------------
 
-    def _send_startup(self, params: ConnParams) raises:
+    def _send_startup(mut self, params: ConnParams) raises:
         """Send StartupMessage (no type byte; first message only)."""
         var body = List[UInt8]()
         # Protocol version 3.0 = 00 03 00 00
@@ -548,7 +576,7 @@ struct PgConnection(Movable):
             msg.append(body[i])
         self._send_bytes(msg)
 
-    def _send_password(self, password: String) raises:
+    def _send_password(mut self, password: String) raises:
         """Send PasswordMessage (type 'p' = 112)."""
         var body = List[UInt8]()
         _append_cstr(body, password)
@@ -561,7 +589,7 @@ struct PgConnection(Movable):
             msg.append(body[i])
         self._send_bytes(msg)
 
-    def _send_query(self, query: String) raises:
+    def _send_query(mut self, query: String) raises:
         """Send Query message (type 'Q' = 81)."""
         var body = List[UInt8]()
         _append_cstr(body, query)
@@ -574,7 +602,7 @@ struct PgConnection(Movable):
             msg.append(body[i])
         self._send_bytes(msg)
 
-    def _send_terminate(self) raises:
+    def _send_terminate(mut self) raises:
         """Send Terminate message (type 'X' = 88)."""
         var msg = List[UInt8]()
         msg.append(UInt8(88))  # 'X'
@@ -611,7 +639,7 @@ struct PgConnection(Movable):
     # Internal: auth handshake
     # -------------------------------------------------------------------------
 
-    def _handle_auth(self, params: ConnParams) raises:
+    def _handle_auth(mut self, params: ConnParams) raises:
         """Read and respond to auth messages; loop until ReadyForQuery."""
         while True:
             var msg = self._recv_msg()
@@ -676,12 +704,17 @@ struct PgConnection(Movable):
         var params = _parse_conninfo(conninfo)
         var conn = PgConnection()
         conn._tcp.connect(params.host, params.port)
+        if params.sslmode == "require" or params.sslmode == "verify-full":
+            var cas = load_system_ca_bundle()
+            conn._tls = TlsSocket(conn._tcp.fd)
+            conn._tls.connect(params.host, cas)
+            conn._use_tls = True
         conn._connected = True
         conn._send_startup(params)
         conn._handle_auth(params)
         return conn^
 
-    def exec(self, query: String) raises -> PgResult:
+    def exec(mut self, query: String) raises -> PgResult:
         """Execute a SQL query and return results.
 
         Args:
@@ -771,5 +804,10 @@ struct PgConnection(Movable):
                 self._send_terminate()
             except:
                 pass
+            if self._use_tls:
+                try:
+                    self._tls.close()
+                except:
+                    pass
             self._tcp.close()
             self._connected = False
