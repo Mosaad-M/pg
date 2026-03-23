@@ -492,7 +492,7 @@ struct PgConnection(Movable):
     # Internal: raw I/O
     # -------------------------------------------------------------------------
 
-    def _send_bytes(mut self, data: List[UInt8]) raises:
+    def _send_bytes(self, data: List[UInt8]) raises:
         """Write all bytes in data to the socket."""
         var n = len(data)
         if n == 0:
@@ -511,7 +511,7 @@ struct PgConnection(Movable):
             sent_total += sent
         buf.free()
 
-    def _recv_msg(mut self) raises -> Tuple[UInt8, List[UInt8]]:
+    def _recv_msg(self) raises -> Tuple[UInt8, List[UInt8]]:
         """Read one backend message: (type_byte, body_bytes).
 
         Format: 1 byte type | 4 bytes big-endian length (includes itself) | body
@@ -531,7 +531,7 @@ struct PgConnection(Movable):
     # Internal: protocol messages sent by client
     # -------------------------------------------------------------------------
 
-    def _send_startup(mut self, params: ConnParams) raises:
+    def _send_startup(self, params: ConnParams) raises:
         """Send StartupMessage (no type byte; first message only)."""
         var body = List[UInt8]()
         # Protocol version 3.0 = 00 03 00 00
@@ -548,7 +548,7 @@ struct PgConnection(Movable):
             msg.append(body[i])
         self._send_bytes(msg)
 
-    def _send_password(mut self, password: String) raises:
+    def _send_password(self, password: String) raises:
         """Send PasswordMessage (type 'p' = 112)."""
         var body = List[UInt8]()
         _append_cstr(body, password)
@@ -561,7 +561,7 @@ struct PgConnection(Movable):
             msg.append(body[i])
         self._send_bytes(msg)
 
-    def _send_query(mut self, query: String) raises:
+    def _send_query(self, query: String) raises:
         """Send Query message (type 'Q' = 81)."""
         var body = List[UInt8]()
         _append_cstr(body, query)
@@ -574,7 +574,7 @@ struct PgConnection(Movable):
             msg.append(body[i])
         self._send_bytes(msg)
 
-    def _send_terminate(mut self) raises:
+    def _send_terminate(self) raises:
         """Send Terminate message (type 'X' = 88)."""
         var msg = List[UInt8]()
         msg.append(UInt8(88))  # 'X'
@@ -611,7 +611,7 @@ struct PgConnection(Movable):
     # Internal: auth handshake
     # -------------------------------------------------------------------------
 
-    def _handle_auth(mut self, params: ConnParams) raises:
+    def _handle_auth(self, params: ConnParams) raises:
         """Read and respond to auth messages; loop until ReadyForQuery."""
         while True:
             var msg = self._recv_msg()
@@ -681,7 +681,7 @@ struct PgConnection(Movable):
         conn._handle_auth(params)
         return conn^
 
-    def exec(mut self, query: String) raises -> PgResult:
+    def exec(self, query: String) raises -> PgResult:
         """Execute a SQL query and return results.
 
         Args:
