@@ -6,3 +6,4 @@
 pixi.lock
 .pixi/
 __pycache__/
+tcp.mojo

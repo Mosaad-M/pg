@@ -1,12 +1,12 @@
 [package]
 name = "pg"
-version = "1.0.0"
-description = "Pure-Mojo PostgreSQL client"
+version = "1.1.0"
+description = "Pure-Mojo PostgreSQL client (wire protocol v3, no libpq)"
 license = "MIT"
-platforms = ["linux-64"]
+platforms = ["linux-64", "osx-arm64"]
 
 [mojo]
 requires = ">=0.26.2"
 
-[c-dependencies]
-pg_wrapper = "pg_wrapper.c"
+[dependencies]
+tcp = { git = "Mosaad-M/tcp", version = ">=1.0.3" }
