@@ -6,7 +6,7 @@ version = "0.1.0"
 
 [tasks]
 init-db = "bash -c 'if [ ! -d .pgdata ]; then initdb -D .pgdata --no-locale --encoding=UTF8 && echo \"unix_socket_directories = '.'\" >> .pgdata/postgresql.conf && echo \"port = 15432\" >> .pgdata/postgresql.conf; fi'"
-start-db = { cmd = "bash -c 'pg_isready -h localhost -p 15432 2>/dev/null || pg_ctl -D .pgdata -l .pgdata/logfile start -o \"-k $(pwd)\" && sleep 1 && (psql -h localhost -p 15432 -d postgres -c \"SELECT 1\" 2>/dev/null || createdb -h localhost -p 15432 mojo_test)'", depends-on = ["init-db"] }
+start-db = { cmd = "bash -c 'pg_isready -h localhost -p 15432 2>/dev/null || (pg_ctl -D .pgdata -l .pgdata/logfile start -o \"-k $(pwd)\" && sleep 2) && (psql -h localhost -p 15432 -lqt 2>/dev/null | grep -qw mojo_test || createdb -h localhost -p 15432 mojo_test)'", depends-on = ["init-db"] }
 stop-db = "pg_ctl -D .pgdata stop 2>/dev/null; true"
 test = { cmd = "bash -c 'bash build_and_run.sh test_pg.mojo; RET=$?; exit $RET'", depends-on = ["start-db"] }
 format = "mblack pg.mojo test_pg.mojo"
