@@ -7,6 +7,7 @@
 # ============================================================================
 
 from pg import PgConnection, PgResult
+from pg import _sha256, _hmac_sha256, _b64_encode, _b64_decode, _pbkdf2_sha256
 
 
 # ============================================================================
@@ -193,6 +194,92 @@ def test_data_types() raises:
 # ============================================================================
 
 
+def test_exec_params() raises:
+    """exec_params() with $1/$2 placeholders avoids SQL injection."""
+    var conn = PgConnection.connect(CONNINFO)
+
+    # Create table (drop first for idempotency)
+    var r0 = conn.exec("DROP TABLE IF EXISTS test_params")
+    r0.clear()
+    var r1 = conn.exec(
+        "CREATE TABLE test_params (id INT, name TEXT)"
+    )
+    r1.clear()
+    var r2 = conn.exec("INSERT INTO test_params VALUES (1, 'Alice'), (2, 'Bob')")
+    r2.clear()
+
+    # Parameterized query
+    var params = List[String]()
+    params.append("1")
+    var result = conn.exec_params(
+        "SELECT id, name FROM test_params WHERE id = $1", params
+    )
+    assert_int_eq(result.num_rows(), 1, "exec_params rows")
+    assert_eq(result.get_value(0, 0), "1", "exec_params id")
+    assert_eq(result.get_value(0, 1), "Alice", "exec_params name")
+    result.clear()
+
+    # Confirm $2 also works
+    var params2 = List[String]()
+    params2.append("2")
+    params2.append("Bob")
+    var result2 = conn.exec_params(
+        "SELECT name FROM test_params WHERE id=$1 AND name=$2", params2
+    )
+    assert_int_eq(result2.num_rows(), 1, "exec_params 2 params")
+    assert_eq(result2.get_value(0, 0), "Bob", "exec_params name2")
+    result2.clear()
+
+    var r3 = conn.exec("DROP TABLE test_params")
+    r3.clear()
+    conn.close()
+
+
+def test_sha256_vectors() raises:
+    """SHA-256 known test vectors (FIPS 180-4)."""
+    # SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    var empty = List[UInt8]()
+    var h0 = _sha256(empty)
+    assert_eq(
+        _hex_encode_test(h0),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sha256 empty"
+    )
+
+    # SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+    var abc = List[UInt8]()
+    abc.append(UInt8(ord("a"))); abc.append(UInt8(ord("b"))); abc.append(UInt8(ord("c")))
+    var h1 = _sha256(abc)
+    assert_eq(
+        _hex_encode_test(h1),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "sha256 abc"
+    )
+
+
+def test_b64_roundtrip() raises:
+    """base64 encode then decode returns original bytes."""
+    var data = List[UInt8]()
+    for i in range(16):
+        data.append(UInt8(i))
+    var encoded = _b64_encode(data)
+    var decoded = _b64_decode(encoded)
+    assert_int_eq(len(decoded), 16, "b64 roundtrip length")
+    for i in range(16):
+        assert_int_eq(Int(decoded[i]), i, "b64 roundtrip byte " + String(i))
+
+
+def _hex_encode_test(data: List[UInt8]) -> String:
+    """Hex-encode for test assertions."""
+    var out = List[UInt8](capacity=len(data) * 2)
+    var hc = "0123456789abcdef".as_bytes()
+    for i in range(len(data)):
+        var b = Int(data[i])
+        out.append(hc[(b >> 4) & 0xF])
+        out.append(hc[b & 0xF])
+    return String(unsafe_from_utf8=out^)
+
+
 def test_sslmode_parsed() raises:
     """sslmode=require triggers TLS code path; fails on non-TLS server."""
     var got_error = False
@@ -239,6 +326,9 @@ def main() raises:
     run_test("multi-row query", passed, failed, test_multi_row_query)
     run_test("data types", passed, failed, test_data_types)
     run_test("sslmode parsed", passed, failed, test_sslmode_parsed)
+    run_test("exec_params", passed, failed, test_exec_params)
+    run_test("sha256 vectors", passed, failed, test_sha256_vectors)
+    run_test("b64 roundtrip", passed, failed, test_b64_roundtrip)
 
     print()
     print(

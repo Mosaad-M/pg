@@ -5,7 +5,7 @@
 # Implements the PostgreSQL frontend/backend protocol (PG wire v3) directly
 # over TCP, with no C shim and no libpq dependency.
 #
-# Supported auth methods: trust, cleartext password, MD5 password.
+# Supported auth methods: trust, cleartext password, MD5 password, SCRAM-SHA-256.
 # Supported TLS: sslmode=require or sslmode=verify-full uses TlsSocket.
 #
 # Public API (unchanged from libpq version):
@@ -287,6 +287,267 @@ def _md5_pg_password(password: String, username: String, salt: List[UInt8]) -> S
     var outer_hex = _md5_hex(outer_data)
 
     return String("md5") + outer_hex
+
+
+# ============================================================================
+# SHA-256 / HMAC-SHA-256 / PBKDF2 / Base64 (for SCRAM-SHA-256 auth)
+# ============================================================================
+
+
+def _rotr32(x: UInt32, n: UInt32) -> UInt32:
+    """Rotate right 32-bit integer x by n bits."""
+    return (x >> n) | (x << (UInt32(32) - n))
+
+
+def _sha256(data: List[UInt8]) -> List[UInt8]:
+    """Compute SHA-256 digest (FIPS 180-4). Returns 32 bytes."""
+    # K constants (first 32 bits of fractional parts of cube roots of first 64 primes)
+    var K = List[UInt32](capacity=64)
+    K.append(0x428a2f98); K.append(0x71374491); K.append(0xb5c0fbcf); K.append(0xe9b5dba5)
+    K.append(0x3956c25b); K.append(0x59f111f1); K.append(0x923f82a4); K.append(0xab1c5ed5)
+    K.append(0xd807aa98); K.append(0x12835b01); K.append(0x243185be); K.append(0x550c7dc3)
+    K.append(0x72be5d74); K.append(0x80deb1fe); K.append(0x9bdc06a7); K.append(0xc19bf174)
+    K.append(0xe49b69c1); K.append(0xefbe4786); K.append(0x0fc19dc6); K.append(0x240ca1cc)
+    K.append(0x2de92c6f); K.append(0x4a7484aa); K.append(0x5cb0a9dc); K.append(0x76f988da)
+    K.append(0x983e5152); K.append(0xa831c66d); K.append(0xb00327c8); K.append(0xbf597fc7)
+    K.append(0xc6e00bf3); K.append(0xd5a79147); K.append(0x06ca6351); K.append(0x14292967)
+    K.append(0x27b70a85); K.append(0x2e1b2138); K.append(0x4d2c6dfc); K.append(0x53380d13)
+    K.append(0x650a7354); K.append(0x766a0abb); K.append(0x81c2c92e); K.append(0x92722c85)
+    K.append(0xa2bfe8a1); K.append(0xa81a664b); K.append(0xc24b8b70); K.append(0xc76c51a3)
+    K.append(0xd192e819); K.append(0xd6990624); K.append(0xf40e3585); K.append(0x106aa070)
+    K.append(0x19a4c116); K.append(0x1e376c08); K.append(0x2748774c); K.append(0x34b0bcb5)
+    K.append(0x391c0cb3); K.append(0x4ed8aa4a); K.append(0x5b9cca4f); K.append(0x682e6ff3)
+    K.append(0x748f82ee); K.append(0x78a5636f); K.append(0x84c87814); K.append(0x8cc70208)
+    K.append(0x90befffa); K.append(0xa4506ceb); K.append(0xbef9a3f7); K.append(0xc67178f2)
+
+    # Pad message: append 0x80, zero-pad to 56 mod 64, append 64-bit big-endian length
+    var msg_len = len(data)
+    var bit_len = UInt64(msg_len) * 8
+    var padded = List[UInt8](capacity=msg_len + 128)
+    for i in range(msg_len):
+        padded.append(data[i])
+    padded.append(0x80)
+    while (len(padded) % 64) != 56:
+        padded.append(0)
+    for i in range(8):
+        padded.append(UInt8((bit_len >> UInt64((7 - i) * 8)) & 0xFF))
+
+    # Initial hash values
+    var h0: UInt32 = 0x6a09e667; var h1: UInt32 = 0xbb67ae85
+    var h2: UInt32 = 0x3c6ef372; var h3: UInt32 = 0xa54ff53a
+    var h4: UInt32 = 0x510e527f; var h5: UInt32 = 0x9b05688c
+    var h6: UInt32 = 0x1f83d9ab; var h7: UInt32 = 0x5be0cd19
+
+    var num_blocks = len(padded) // 64
+    for blk in range(num_blocks):
+        var base = blk * 64
+        # Build message schedule W[0..63]
+        var W = List[UInt32](capacity=64)
+        for j in range(16):
+            var o = base + j * 4
+            W.append(
+                (UInt32(padded[o]) << 24)
+                | (UInt32(padded[o + 1]) << 16)
+                | (UInt32(padded[o + 2]) << 8)
+                | UInt32(padded[o + 3])
+            )
+        for j in range(16, 64):
+            var s0 = _rotr32(W[j - 15], 7) ^ _rotr32(W[j - 15], 18) ^ (W[j - 15] >> 3)
+            var s1 = _rotr32(W[j - 2], 17) ^ _rotr32(W[j - 2], 19) ^ (W[j - 2] >> 10)
+            W.append(W[j - 16] + s0 + W[j - 7] + s1)
+
+        var a = h0; var b = h1; var c = h2; var d = h3
+        var e = h4; var f = h5; var g = h6; var h = h7
+
+        for i in range(64):
+            var S1 = _rotr32(e, 6) ^ _rotr32(e, 11) ^ _rotr32(e, 25)
+            var ch = (e & f) ^ ((~e) & g)
+            var temp1 = h + S1 + ch + K[i] + W[i]
+            var S0 = _rotr32(a, 2) ^ _rotr32(a, 13) ^ _rotr32(a, 22)
+            var maj = (a & b) ^ (a & c) ^ (b & c)
+            var temp2 = S0 + maj
+            h = g; g = f; f = e; e = d + temp1
+            d = c; c = b; b = a; a = temp1 + temp2
+
+        h0 = h0 + a; h1 = h1 + b; h2 = h2 + c; h3 = h3 + d
+        h4 = h4 + e; h5 = h5 + f; h6 = h6 + g; h7 = h7 + h
+
+    # Output 32 big-endian bytes
+    var digest = List[UInt8](capacity=32)
+    for wi in range(8):
+        var w: UInt32 = 0
+        if wi == 0: w = h0
+        elif wi == 1: w = h1
+        elif wi == 2: w = h2
+        elif wi == 3: w = h3
+        elif wi == 4: w = h4
+        elif wi == 5: w = h5
+        elif wi == 6: w = h6
+        else: w = h7
+        digest.append(UInt8((w >> 24) & 0xFF))
+        digest.append(UInt8((w >> 16) & 0xFF))
+        digest.append(UInt8((w >> 8) & 0xFF))
+        digest.append(UInt8(w & 0xFF))
+    return digest^
+
+
+def _hmac_sha256(key: List[UInt8], data: List[UInt8]) -> List[UInt8]:
+    """Compute HMAC-SHA-256. Returns 32 bytes."""
+    # Normalize key: hash if > 64 bytes, pad with zeros if < 64 bytes
+    var k = List[UInt8](capacity=64)
+    if len(key) > 64:
+        var hk = _sha256(key)
+        for i in range(len(hk)):
+            k.append(hk[i])
+    else:
+        for i in range(len(key)):
+            k.append(key[i])
+    while len(k) < 64:
+        k.append(0)
+
+    # inner = SHA-256((k XOR ipad) || data)
+    var inner = List[UInt8](capacity=64 + len(data))
+    for i in range(64):
+        inner.append(k[i] ^ 0x36)
+    for i in range(len(data)):
+        inner.append(data[i])
+    var inner_hash = _sha256(inner)
+
+    # outer = SHA-256((k XOR opad) || inner_hash)
+    var outer = List[UInt8](capacity=96)
+    for i in range(64):
+        outer.append(k[i] ^ 0x5C)
+    for i in range(32):
+        outer.append(inner_hash[i])
+    return _sha256(outer)^
+
+
+def _pbkdf2_sha256(
+    password: List[UInt8], salt: List[UInt8], iterations: Int
+) -> List[UInt8]:
+    """PBKDF2-HMAC-SHA-256 with one 32-byte output block."""
+    # U1 = HMAC(password, salt || 0x00000001)
+    var salt_block = List[UInt8](capacity=len(salt) + 4)
+    for i in range(len(salt)):
+        salt_block.append(salt[i])
+    salt_block.append(0); salt_block.append(0)
+    salt_block.append(0); salt_block.append(1)
+
+    var U = _hmac_sha256(password, salt_block)
+    var result = U.copy()
+
+    for _ in range(iterations - 1):
+        U = _hmac_sha256(password, U)
+        var xored = List[UInt8](capacity=32)
+        for i in range(32):
+            xored.append(result[i] ^ U[i])
+        result = xored^
+
+    return result^
+
+
+comptime _B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def _b64_encode(data: List[UInt8]) -> String:
+    """Encode bytes as standard base64 (with = padding)."""
+    var out = List[UInt8]()
+    var chars = _B64_CHARS.as_bytes()
+    var n = len(data)
+    var i = 0
+    while i + 2 < n:
+        var b0 = Int(data[i])
+        var b1 = Int(data[i + 1])
+        var b2 = Int(data[i + 2])
+        out.append(chars[(b0 >> 2) & 0x3F])
+        out.append(chars[((b0 & 0x3) << 4) | ((b1 >> 4) & 0xF)])
+        out.append(chars[((b1 & 0xF) << 2) | ((b2 >> 6) & 0x3)])
+        out.append(chars[b2 & 0x3F])
+        i += 3
+    if i + 1 == n:
+        var b0 = Int(data[i])
+        out.append(chars[(b0 >> 2) & 0x3F])
+        out.append(chars[(b0 & 0x3) << 4])
+        out.append(UInt8(ord("=")))
+        out.append(UInt8(ord("=")))
+    elif i + 2 == n:
+        var b0 = Int(data[i])
+        var b1 = Int(data[i + 1])
+        out.append(chars[(b0 >> 2) & 0x3F])
+        out.append(chars[((b0 & 0x3) << 4) | ((b1 >> 4) & 0xF)])
+        out.append(chars[(b1 & 0xF) << 2])
+        out.append(UInt8(ord("=")))
+    return String(unsafe_from_utf8=out^)
+
+
+def _b64_char_val(c: UInt8) -> Int:
+    """Return 6-bit value for a base64 character (0 for '=' or invalid)."""
+    if c >= UInt8(ord("A")) and c <= UInt8(ord("Z")):
+        return Int(c) - ord("A")
+    elif c >= UInt8(ord("a")) and c <= UInt8(ord("z")):
+        return Int(c) - ord("a") + 26
+    elif c >= UInt8(ord("0")) and c <= UInt8(ord("9")):
+        return Int(c) - ord("0") + 52
+    elif c == UInt8(ord("+")):
+        return 62
+    elif c == UInt8(ord("/")):
+        return 63
+    return 0
+
+
+def _b64_decode(s: String) -> List[UInt8]:
+    """Decode standard base64 string to bytes."""
+    var out = List[UInt8]()
+    var sb = s.as_bytes()
+    var n = len(sb)
+    var i = 0
+    while i + 4 <= n:
+        var c0 = _b64_char_val(sb[i])
+        var c1 = _b64_char_val(sb[i + 1])
+        var c2 = _b64_char_val(sb[i + 2])
+        var c3 = _b64_char_val(sb[i + 3])
+        out.append(UInt8((c0 << 2) | (c1 >> 4)))
+        if sb[i + 2] != UInt8(ord("=")):
+            out.append(UInt8(((c1 & 0xF) << 4) | (c2 >> 2)))
+        if sb[i + 3] != UInt8(ord("=")):
+            out.append(UInt8(((c2 & 0x3) << 6) | c3))
+        i += 4
+    return out^
+
+
+def _random_bytes(n: Int) -> List[UInt8]:
+    """Generate n pseudo-random bytes from clock_gettime + PID + SHA-256.
+
+    Sufficient for SCRAM nonces: security is guaranteed by the server's
+    additional random contribution to the combined nonce.
+    """
+    # Read monotonic clock (16 bytes: int64 tv_sec + int64 tv_nsec)
+    var ts = alloc[UInt8](16)
+    for i in range(16):
+        (ts + i)[] = 0
+    _ = external_call["clock_gettime", Int32](Int32(1), ts)  # CLOCK_MONOTONIC=1
+    var pid = external_call["getpid", Int32]()
+    # Seed: clock bytes + PID bytes
+    var seed = List[UInt8](capacity=20)
+    for i in range(16):
+        seed.append((ts + i)[])
+    ts.free()
+    seed.append(UInt8(Int(pid) & 0xFF))
+    seed.append(UInt8((Int(pid) >> 8) & 0xFF))
+    seed.append(UInt8((Int(pid) >> 16) & 0xFF))
+    seed.append(UInt8((Int(pid) >> 24) & 0xFF))
+    # Expand to n bytes via iterated SHA-256
+    var result = List[UInt8](capacity=n)
+    var counter = 0
+    while len(result) < n:
+        var ext = seed.copy()
+        ext.append(UInt8(counter & 0xFF))
+        var hash = _sha256(ext)
+        for i in range(len(hash)):
+            if len(result) < n:
+                result.append(hash[i])
+        counter += 1
+    return result^
 
 
 # ============================================================================
@@ -602,6 +863,92 @@ struct PgConnection(Movable):
             msg.append(body[i])
         self._send_bytes(msg)
 
+    def _send_parse(mut self, query: String) raises:
+        """Send Parse message (type 'P' = 80). Uses unnamed statement."""
+        var body = List[UInt8]()
+        _append_cstr(body, "")     # unnamed statement
+        _append_cstr(body, query)  # query string
+        var nparams = _write_i16(Int16(0))  # no parameter type OIDs
+        for i in range(len(nparams)):
+            body.append(nparams[i])
+        var msg = List[UInt8]()
+        msg.append(UInt8(80))  # 'P'
+        var length = _write_i32(Int32(len(body) + 4))
+        for i in range(len(length)):
+            msg.append(length[i])
+        for i in range(len(body)):
+            msg.append(body[i])
+        self._send_bytes(msg)
+
+    def _send_bind(mut self, params: List[String]) raises:
+        """Send Bind message (type 'B' = 66). Text format for all params/results."""
+        var body = List[UInt8]()
+        _append_cstr(body, "")  # unnamed portal
+        _append_cstr(body, "")  # unnamed statement
+        var nfmt = _write_i16(Int16(0))  # zero format codes = use text for all
+        for i in range(len(nfmt)):
+            body.append(nfmt[i])
+        var np = _write_i16(Int16(len(params)))
+        for i in range(len(np)):
+            body.append(np[i])
+        for pi in range(len(params)):
+            var pb = _str_to_bytes(params[pi])
+            var plen = _write_i32(Int32(len(pb)))
+            for i in range(len(plen)):
+                body.append(plen[i])
+            for i in range(len(pb)):
+                body.append(pb[i])
+        var rfc = _write_i16(Int16(0))  # zero result format codes = text
+        for i in range(len(rfc)):
+            body.append(rfc[i])
+        var msg = List[UInt8]()
+        msg.append(UInt8(66))  # 'B'
+        var length = _write_i32(Int32(len(body) + 4))
+        for i in range(len(length)):
+            msg.append(length[i])
+        for i in range(len(body)):
+            msg.append(body[i])
+        self._send_bytes(msg)
+
+    def _send_describe_portal(mut self) raises:
+        """Send Describe portal message (type 'D' = 68). Triggers RowDescription."""
+        var body = List[UInt8]()
+        body.append(UInt8(80))  # 'P' = portal (vs 'S' = statement)
+        _append_cstr(body, "")  # unnamed portal
+        var msg = List[UInt8]()
+        msg.append(UInt8(68))  # 'D'
+        var length = _write_i32(Int32(len(body) + 4))
+        for i in range(len(length)):
+            msg.append(length[i])
+        for i in range(len(body)):
+            msg.append(body[i])
+        self._send_bytes(msg)
+
+    def _send_execute(mut self) raises:
+        """Send Execute message (type 'E' = 69). Unnamed portal, unlimited rows."""
+        var body = List[UInt8]()
+        _append_cstr(body, "")   # unnamed portal
+        var rl = _write_i32(Int32(0))  # no row limit
+        for i in range(len(rl)):
+            body.append(rl[i])
+        var msg = List[UInt8]()
+        msg.append(UInt8(69))  # 'E'
+        var length = _write_i32(Int32(len(body) + 4))
+        for i in range(len(length)):
+            msg.append(length[i])
+        for i in range(len(body)):
+            msg.append(body[i])
+        self._send_bytes(msg)
+
+    def _send_sync(mut self) raises:
+        """Send Sync message (type 'S' = 83)."""
+        var msg = List[UInt8]()
+        msg.append(UInt8(83))  # 'S'
+        var length = _write_i32(Int32(4))
+        for i in range(len(length)):
+            msg.append(length[i])
+        self._send_bytes(msg)
+
     def _send_terminate(mut self) raises:
         """Send Terminate message (type 'X' = 88)."""
         var msg = List[UInt8]()
@@ -635,6 +982,186 @@ struct PgConnection(Movable):
             i += 1  # skip null
         return String("unknown error")
 
+    def _do_scram_auth(mut self, body: List[UInt8], params: ConnParams) raises:
+        """Handle SCRAM-SHA-256 authentication exchange (RFC 5802).
+
+        Called from _handle_auth when auth_type == 10 (SASL).
+        Manages all SCRAM round-trips internally; on return, _handle_auth
+        will receive AuthenticationOk then ReadyForQuery as normal.
+
+        Args:
+            body: Body of the initial AuthenticationSASL message (auth_type + mechs).
+            params: Connection parameters with user/password.
+        """
+        # Verify SCRAM-SHA-256 is in the mechanism list
+        var found_scram = False
+        var i = 4  # skip Int32(10)
+        while i < len(body):
+            var mend = i
+            while mend < len(body) and body[mend] != 0:
+                mend += 1
+            if mend > i:
+                var mb = List[UInt8]()
+                for j in range(i, mend):
+                    mb.append(body[j])
+                if String(unsafe_from_utf8=mb^) == "SCRAM-SHA-256":
+                    found_scram = True
+            i = mend + 1
+
+        if not found_scram:
+            raise Error("pg: SCRAM-SHA-256 not offered by server")
+
+        # Generate client nonce (18 random bytes → base64)
+        var nonce_raw = _random_bytes(18)
+        var client_nonce = _b64_encode(nonce_raw)
+
+        # client-first-message
+        var client_first_bare = "n=" + params.user + ",r=" + client_nonce
+        var client_first = "n,," + client_first_bare
+
+        # Send SASLInitialResponse ('p')
+        var payload = List[UInt8]()
+        _append_cstr(payload, "SCRAM-SHA-256")
+        var cfb = _str_to_bytes(client_first)
+        var cflen = _write_i32(Int32(len(cfb)))
+        for k in range(4):
+            payload.append(cflen[k])
+        for k in range(len(cfb)):
+            payload.append(cfb[k])
+        var sasl_init = List[UInt8]()
+        sasl_init.append(UInt8(112))  # 'p'
+        var sasl_len = _write_i32(Int32(len(payload) + 4))
+        for k in range(4):
+            sasl_init.append(sasl_len[k])
+        for k in range(len(payload)):
+            sasl_init.append(payload[k])
+        self._send_bytes(sasl_init)
+
+        # Receive AuthenticationSASLContinue (auth_type 11)
+        var msg2 = self._recv_msg()
+        if msg2[0] != MSG_AUTH:
+            raise Error("pg: SCRAM: expected SASLContinue")
+        var b2 = msg2[1].copy()
+        if len(b2) < 4 or Int(_read_i32(b2, 0)) != 11:
+            raise Error("pg: SCRAM: expected auth_type 11")
+
+        # Parse server-first-message: "r=<nonce>,s=<salt_b64>,i=<iter>"
+        var sf_bytes = List[UInt8]()
+        for k in range(4, len(b2)):
+            sf_bytes.append(b2[k])
+        var server_first = String(unsafe_from_utf8=sf_bytes^)
+
+        var server_nonce = String("")
+        var salt_b64 = String("")
+        var iterations = 4096
+
+        var sf_raw = server_first.as_bytes()
+        var sf_n = len(sf_raw)
+        var pos = 0
+        while pos < sf_n:
+            var eq = pos
+            while eq < sf_n and sf_raw[eq] != UInt8(ord("=")):
+                eq += 1
+            if eq >= sf_n:
+                break
+            var kb = List[UInt8]()
+            for k in range(pos, eq):
+                kb.append(sf_raw[k])
+            var sf_key = String(unsafe_from_utf8=kb^)
+            eq += 1
+            var vs = eq
+            while eq < sf_n and sf_raw[eq] != UInt8(ord(",")):
+                eq += 1
+            var vb = List[UInt8]()
+            for k in range(vs, eq):
+                vb.append(sf_raw[k])
+            var sf_val = String(unsafe_from_utf8=vb^)
+            if sf_key == "r":
+                server_nonce = sf_val^
+            elif sf_key == "s":
+                salt_b64 = sf_val^
+            elif sf_key == "i":
+                iterations = Int(sf_val)
+            pos = eq + 1  # skip ','
+
+        if len(server_nonce) == 0 or len(salt_b64) == 0:
+            raise Error("pg: SCRAM: malformed server-first: " + server_first)
+
+        # Verify server nonce starts with our client nonce
+        var cn_b = client_nonce.as_bytes()
+        var sn_b = server_nonce.as_bytes()
+        if len(sn_b) < len(cn_b):
+            raise Error("pg: SCRAM: server nonce shorter than client nonce")
+        for k in range(len(cn_b)):
+            if sn_b[k] != cn_b[k]:
+                raise Error("pg: SCRAM: server nonce mismatch")
+
+        # Compute SaltedPassword = PBKDF2-HMAC-SHA-256(password, salt, iterations)
+        var salt = _b64_decode(salt_b64)
+        var pw_bytes = _str_to_bytes(params.password)
+        var salted_pw = _pbkdf2_sha256(pw_bytes, salt, iterations)
+
+        # ClientKey = HMAC(SaltedPassword, "Client Key")
+        var client_key = _hmac_sha256(salted_pw, _str_to_bytes("Client Key"))
+        # StoredKey = SHA-256(ClientKey)
+        var stored_key = _sha256(client_key)
+
+        # client-final-message-without-proof
+        var gs2_b64 = _b64_encode(_str_to_bytes("n,,"))
+        var cfm_no_proof = "c=" + gs2_b64 + ",r=" + server_nonce
+
+        # AuthMessage = client-first-bare + "," + server-first + "," + cfm-no-proof
+        var auth_msg = _str_to_bytes(
+            client_first_bare + "," + server_first + "," + cfm_no_proof
+        )
+
+        # ClientSignature = HMAC(StoredKey, AuthMessage)
+        var client_sig = _hmac_sha256(stored_key, auth_msg)
+
+        # ClientProof = ClientKey XOR ClientSignature
+        var client_proof = List[UInt8](capacity=32)
+        for k in range(32):
+            client_proof.append(client_key[k] ^ client_sig[k])
+        var proof_b64 = _b64_encode(client_proof)
+
+        # ServerSignature = HMAC(HMAC(SaltedPassword, "Server Key"), AuthMessage)
+        var server_key = _hmac_sha256(salted_pw, _str_to_bytes("Server Key"))
+        var expected_server_sig = _b64_encode(_hmac_sha256(server_key, auth_msg))
+
+        # Send SASLResponse ('p') with client-final-message
+        var client_final = cfm_no_proof + ",p=" + proof_b64
+        var cf_bytes = _str_to_bytes(client_final)
+        var sasl_resp = List[UInt8]()
+        sasl_resp.append(UInt8(112))  # 'p'
+        var resp_len = _write_i32(Int32(len(cf_bytes) + 4))
+        for k in range(4):
+            sasl_resp.append(resp_len[k])
+        for k in range(len(cf_bytes)):
+            sasl_resp.append(cf_bytes[k])
+        self._send_bytes(sasl_resp)
+
+        # Receive AuthenticationSASLFinal (auth_type 12)
+        var msg3 = self._recv_msg()
+        if msg3[0] != MSG_AUTH:
+            raise Error("pg: SCRAM: expected SASLFinal")
+        var b3 = msg3[1].copy()
+        if len(b3) < 4 or Int(_read_i32(b3, 0)) != 12:
+            raise Error("pg: SCRAM: expected auth_type 12")
+
+        # Verify server signature: body is "v=<base64>"
+        var sf_final_b = List[UInt8]()
+        for k in range(4, len(b3)):
+            sf_final_b.append(b3[k])
+        var server_final = String(unsafe_from_utf8=sf_final_b^)
+        var sf_raw2 = server_final.as_bytes()
+        if len(sf_raw2) > 2 and sf_raw2[0] == UInt8(ord("v")) and sf_raw2[1] == UInt8(ord("=")):
+            var sig_b = List[UInt8]()
+            for k in range(2, len(sf_raw2)):
+                sig_b.append(sf_raw2[k])
+            var actual_sig = String(unsafe_from_utf8=sig_b^)
+            if actual_sig != expected_server_sig:
+                raise Error("pg: SCRAM: server signature verification failed")
+
     # -------------------------------------------------------------------------
     # Internal: auth handshake
     # -------------------------------------------------------------------------
@@ -667,6 +1194,9 @@ struct PgConnection(Movable):
                     salt.append(body[7])
                     var response = _md5_pg_password(params.password, params.user, salt)
                     self._send_password(response)
+                elif auth_type == 10:
+                    # SASL — SCRAM-SHA-256 (handles all SCRAM round-trips internally)
+                    self._do_scram_auth(body, params)
                 else:
                     raise Error("pg: unsupported auth method: " + String(auth_type))
 
@@ -796,6 +1326,95 @@ struct PgConnection(Movable):
 
             else:
                 pass  # skip unknown
+
+    def exec_params(mut self, query: String, params: List[String]) raises -> PgResult:
+        """Execute a parameterized query using the Extended Query protocol.
+
+        Uses $1, $2, ... placeholders. Parameters are sent as text values,
+        avoiding manual SQL quoting and injection risk.
+
+        Args:
+            query: SQL with $N placeholders, e.g. "SELECT * FROM t WHERE id=$1".
+            params: Parameter values as strings.
+
+        Returns:
+            PgResult with rows and column metadata.
+
+        Raises:
+            Error if not connected or query fails.
+        """
+        if not self._connected:
+            raise Error("pg: not connected")
+
+        self._send_parse(query)
+        self._send_bind(params)
+        self._send_describe_portal()
+        self._send_execute()
+        self._send_sync()
+
+        var result = PgResult()
+        var got_row_desc = False
+
+        while True:
+            var msg = self._recv_msg()
+            var mtype = msg[0]
+            var body = msg[1].copy()
+
+            if mtype == UInt8(49) or mtype == UInt8(50):
+                # ParseComplete ('1') or BindComplete ('2') — discard
+                pass
+            elif mtype == MSG_ROW_DESC:
+                if len(body) < 2:
+                    raise Error("pg: malformed RowDescription")
+                var ncols = Int(_read_i16(body, 0))
+                result._ncols = ncols
+                var offset = 2
+                for _ in range(ncols):
+                    var cstr_res = _read_cstr(body, offset)
+                    var col_name = cstr_res[0]
+                    offset = cstr_res[1]
+                    result._names.append(col_name^)
+                    offset += 18
+                got_row_desc = True
+            elif mtype == MSG_DATA_ROW:
+                if not got_row_desc:
+                    raise Error("pg: DataRow before RowDescription")
+                if len(body) < 2:
+                    raise Error("pg: malformed DataRow")
+                var ncols = Int(_read_i16(body, 0))
+                var offset = 2
+                var row_vals = List[String](capacity=ncols)
+                var row_nulls = List[Bool](capacity=ncols)
+                for _ in range(ncols):
+                    if offset + 4 > len(body):
+                        raise Error("pg: DataRow truncated")
+                    var col_len = Int(_read_i32(body, offset))
+                    offset += 4
+                    if col_len == -1:
+                        row_vals.append(String(""))
+                        row_nulls.append(True)
+                    else:
+                        var val_bytes = List[UInt8](capacity=col_len)
+                        for k in range(col_len):
+                            val_bytes.append(body[offset + k])
+                        offset += col_len
+                        row_vals.append(String(unsafe_from_utf8=val_bytes^))
+                        row_nulls.append(False)
+                result._rows.append(row_vals^)
+                result._nulls.append(row_nulls^)
+                result._nrows += 1
+            elif mtype == MSG_COMMAND_COMPLETE or mtype == UInt8(110):
+                # CommandComplete or NoData — continue
+                pass
+            elif mtype == MSG_READY:
+                return result^
+            elif mtype == MSG_ERROR:
+                var err = self._extract_error(body)
+                raise Error("pg: exec_params error: " + err)
+            elif mtype == MSG_PARAM_STATUS or mtype == MSG_NOTICE or mtype == MSG_EMPTY_QUERY:
+                pass
+            else:
+                pass
 
     def close(mut self):
         """Close the connection. Safe to call multiple times."""
