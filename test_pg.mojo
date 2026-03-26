@@ -294,6 +294,79 @@ def test_sslmode_parsed() raises:
     assert_true(got_error, "sslmode=require should fail on non-TLS server")
 
 
+def test_exec_pipeline() raises:
+    """Pipeline: 3 INSERTs + 1 SELECT in one round-trip."""
+    var conn = PgConnection.connect(
+        "host=localhost port=15432 dbname=mojo_test"
+    )
+    _ = conn.exec("DROP TABLE IF EXISTS test_pipeline")
+    _ = conn.exec("CREATE TABLE test_pipeline (id INT, val TEXT)")
+
+    var queries = List[String]()
+    queries.append("INSERT INTO test_pipeline VALUES (1, 'alpha')")
+    queries.append("INSERT INTO test_pipeline VALUES (2, 'beta')")
+    queries.append("INSERT INTO test_pipeline VALUES (3, 'gamma')")
+    queries.append("SELECT COUNT(*) FROM test_pipeline")
+
+    var results = conn.exec_pipeline(queries)
+
+    assert_int_eq(len(results), 4, "pipeline: result count")
+    assert_true(results[0].error == "", "pipeline: insert 1 no error")
+    assert_true(results[1].error == "", "pipeline: insert 2 no error")
+    assert_true(results[2].error == "", "pipeline: insert 3 no error")
+    assert_true(results[3].error == "", "pipeline: SELECT no error")
+    assert_int_eq(results[3].num_rows(), 1, "pipeline: SELECT row count")
+    assert_true(results[3].get_value(0, 0) == "3", "pipeline: SELECT count = 3")
+
+    _ = conn.exec("DROP TABLE IF EXISTS test_pipeline")
+    conn.close()
+
+
+def test_exec_pipeline_empty() raises:
+    """Empty pipeline returns empty result list."""
+    var conn = PgConnection.connect(
+        "host=localhost port=15432 dbname=mojo_test"
+    )
+    var queries = List[String]()
+    var results = conn.exec_pipeline(queries)
+    assert_int_eq(len(results), 0, "empty pipeline: result count")
+    conn.close()
+
+
+def test_exec_pipeline_single() raises:
+    """Single-query pipeline behaves like exec()."""
+    var conn = PgConnection.connect(
+        "host=localhost port=15432 dbname=mojo_test"
+    )
+    var queries = List[String]()
+    queries.append("SELECT 42 AS n")
+    var results = conn.exec_pipeline(queries)
+    assert_int_eq(len(results), 1, "single pipeline: result count")
+    assert_true(results[0].error == "", "single pipeline: no error")
+    assert_int_eq(results[0].num_rows(), 1, "single pipeline: row count")
+    assert_true(results[0].get_value(0, 0) == "42", "single pipeline: value")
+    conn.close()
+
+
+def test_exec_pipeline_error_middle() raises:
+    """Mixed pipeline: ok, INVALID SQL, ok — middle result has error."""
+    var conn = PgConnection.connect(
+        "host=localhost port=15432 dbname=mojo_test"
+    )
+    var queries = List[String]()
+    queries.append("SELECT 1 AS first")
+    queries.append("INVALID SQL *** DELIBERATE ERROR ***")
+    queries.append("SELECT 3 AS third")
+
+    var results = conn.exec_pipeline(queries)
+    assert_int_eq(len(results), 3, "mixed pipeline: result count")
+    assert_true(results[0].error == "", "mixed pipeline: first ok")
+    assert_true(results[1].error != "", "mixed pipeline: second has error")
+    # After an error in a pipeline, PG sends ErrorResponse for subsequent
+    # queries too. We verify all 3 results are returned (connection still alive).
+    conn.close()
+
+
 def main() raises:
     var passed = 0
     var failed = 0
@@ -329,6 +402,10 @@ def main() raises:
     run_test("exec_params", passed, failed, test_exec_params)
     run_test("sha256 vectors", passed, failed, test_sha256_vectors)
     run_test("b64 roundtrip", passed, failed, test_b64_roundtrip)
+    run_test("exec_pipeline 3 inserts + SELECT", passed, failed, test_exec_pipeline)
+    run_test("exec_pipeline empty",              passed, failed, test_exec_pipeline_empty)
+    run_test("exec_pipeline single query",       passed, failed, test_exec_pipeline_single)
+    run_test("exec_pipeline error in middle",    passed, failed, test_exec_pipeline_error_middle)
 
     print()
     print(

@@ -670,14 +670,20 @@ def _parse_conninfo(conninfo: String) raises -> ConnParams:
 # ============================================================================
 
 
-struct PgResult(Movable):
-    """Holds query results as in-memory rows/columns."""
+struct PgResult(Copyable, Movable):
+    """Holds query results as in-memory rows/columns.
+
+    The `error` field is non-empty only when this result was produced by
+    exec_pipeline() for a query that failed.  exec() and exec_params() always
+    raise on failure, so their results always have error == "".
+    """
 
     var _names: List[String]
     var _rows: List[List[String]]
     var _nulls: List[List[Bool]]
     var _nrows: Int
     var _ncols: Int
+    var error: String   # non-empty when query failed (pipeline only)
 
     def __init__(out self):
         self._names = List[String]()
@@ -685,6 +691,15 @@ struct PgResult(Movable):
         self._nulls = List[List[Bool]]()
         self._nrows = 0
         self._ncols = 0
+        self.error = String("")
+
+    def __copyinit__(out self, copy: Self):
+        self._names = copy._names.copy()
+        self._rows = copy._rows.copy()
+        self._nulls = copy._nulls.copy()
+        self._nrows = copy._nrows
+        self._ncols = copy._ncols
+        self.error = copy.error
 
     def __moveinit__(out self, deinit take: Self):
         self._names = take._names^
@@ -692,6 +707,7 @@ struct PgResult(Movable):
         self._nulls = take._nulls^
         self._nrows = take._nrows
         self._ncols = take._ncols
+        self.error = take.error^
 
     def num_rows(self) -> Int:
         """Number of rows in result."""
@@ -1415,6 +1431,145 @@ struct PgConnection(Movable):
                 pass
             else:
                 pass
+
+    def exec_pipeline(mut self, queries: List[String]) raises -> List[PgResult]:
+        """Execute multiple queries in a single pipeline (one round-trip).
+
+        All queries are sent before any responses are read, eliminating per-query
+        round-trip latency. Returns exactly len(queries) results in order.
+
+        Results where a query failed have result.error set to a non-empty error
+        message; successful results have result.error == "".
+
+        Note: a mid-pipeline error causes PostgreSQL to issue ErrorResponse for
+        all subsequent queries in the same pipeline until ReadyForQuery resets
+        the connection. All results are still returned.
+
+        PgConnection is not safe for concurrent use.
+
+        Args:
+            queries: SQL strings to pipeline.
+
+        Returns:
+            List of PgResult, one per query, in input order.
+        """
+        if not self._connected:
+            raise Error("pg: not connected")
+        if len(queries) == 0:
+            return List[PgResult]()
+
+        # ── Send phase ────────────────────────────────────────────────────────
+        # For each query: Parse + Bind + Describe + Execute
+        # Then a single Sync at the end
+        var empty_params = List[String]()
+        for i in range(len(queries)):
+            self._send_parse(queries[i])
+            self._send_bind(empty_params)
+            self._send_describe_portal()
+            self._send_execute()
+        self._send_sync()  # exactly one Sync for the entire pipeline
+
+        # ── Receive phase ────────────────────────────────────────────────────
+        # Drain responses for each query (ParseComplete, BindComplete,
+        # [RowDescription], DataRow*, CommandComplete|ErrorResponse),
+        # then one ReadyForQuery from the Sync.
+        var results = List[PgResult]()
+        var qi = 0
+        var current = PgResult()
+        var got_row_desc = False
+
+        while True:
+            var msg = self._recv_msg()
+            var mtype = msg[0]
+            var body = msg[1].copy()
+
+            if mtype == UInt8(49) or mtype == UInt8(50):
+                # ParseComplete ('1') or BindComplete ('2') — preamble, discard
+                pass
+
+            elif mtype == MSG_ROW_DESC:
+                if len(body) >= 2:
+                    var ncols = Int(_read_i16(body, 0))
+                    current._ncols = ncols
+                    var offset = 2
+                    for _ in range(ncols):
+                        var cstr_res = _read_cstr(body, offset)
+                        var col_name = cstr_res[0]
+                        offset = cstr_res[1]
+                        current._names.append(col_name^)
+                        offset += 18
+                    got_row_desc = True
+
+            elif mtype == MSG_DATA_ROW:
+                if got_row_desc and len(body) >= 2:
+                    var ncols = Int(_read_i16(body, 0))
+                    var offset = 2
+                    var row_vals = List[String](capacity=ncols)
+                    var row_nulls = List[Bool](capacity=ncols)
+                    for _ in range(ncols):
+                        if offset + 4 > len(body):
+                            break
+                        var col_len = Int(_read_i32(body, offset))
+                        offset += 4
+                        if col_len == -1:
+                            row_vals.append(String(""))
+                            row_nulls.append(True)
+                        else:
+                            var val_bytes = List[UInt8](capacity=col_len)
+                            for k in range(col_len):
+                                val_bytes.append(body[offset + k])
+                            offset += col_len
+                            row_vals.append(String(unsafe_from_utf8=val_bytes^))
+                            row_nulls.append(False)
+                    current._rows.append(row_vals^)
+                    current._nulls.append(row_nulls^)
+                    current._nrows += 1
+
+            elif mtype == UInt8(110):
+                # NoData ('n'): query produces no rows — discard, stay on same query
+                pass
+
+            elif mtype == MSG_COMMAND_COMPLETE:
+                # CommandComplete ('C') — query finished successfully
+                results.append(current^)
+                current = PgResult()
+                got_row_desc = False
+                qi += 1
+                if qi >= len(queries):
+                    # All queries done; drain ReadyForQuery
+                    while True:
+                        var rm = self._recv_msg()
+                        if rm[0] == MSG_READY:
+                            break
+                    return results^
+
+            elif mtype == MSG_ERROR:
+                # Query failed — store error, continue draining
+                var err = self._extract_error(body)
+                current.error = err
+                results.append(current^)
+                current = PgResult()
+                got_row_desc = False
+                qi += 1
+                if qi >= len(queries):
+                    while True:
+                        var rm = self._recv_msg()
+                        if rm[0] == MSG_READY:
+                            break
+                    return results^
+
+            elif mtype == MSG_READY:
+                # ReadyForQuery arrived before all queries completed (can happen
+                # if the connection is in error state); flush remaining results
+                while qi < len(queries):
+                    var empty = PgResult()
+                    empty.error = "pipeline: connection reset before query completed"
+                    results.append(empty^)
+                    qi += 1
+                return results^
+
+            else:
+                pass  # MSG_PARAM_STATUS, MSG_NOTICE, etc.
 
     def close(mut self):
         """Close the connection. Safe to call multiple times."""
