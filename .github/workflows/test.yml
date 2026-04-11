@@ -28,3 +28,26 @@ jobs:
 
       - name: Run tests
         run: pixi run test
+
+  test-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pixi
+        uses: prefix-dev/setup-pixi@v0.8.1
+
+      - name: Install mojo-pkg
+        run: |
+          mkdir -p "$HOME/.mojo/bin"
+          curl -fsSL https://github.com/Mosaad-M/mojo-pkg/releases/latest/download/mojo-pkg-osx-arm64.tar.gz \
+            | tar xz -C "$HOME/.mojo/bin"
+          echo "$HOME/.mojo/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          DYLD_LIBRARY_PATH="$(pwd)/.pixi/envs/default/lib" \
+            $HOME/.mojo/bin/mojo-pkg install
+
+      - name: Run tests
+        run: pixi run test
