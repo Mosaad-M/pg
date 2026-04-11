@@ -3,17 +3,17 @@
   "packages": [
     {
       "name": "tcp",
-      "version": "1.0.3",
-      "source_url": "https://github.com/Mosaad-M/tcp/archive/refs/tags/v1.0.3.tar.gz",
-      "sha256": "89e602565839c1c8a1cb00ed4713c78aaa943836d977cdff616f658e8377a877",
-      "install_path": "/home/mmosaad/.mojo/packages/tcp/1.0.3"
+      "version": "1.0.5",
+      "source_url": "https://github.com/Mosaad-M/tcp/archive/refs/tags/v1.0.5.tar.gz",
+      "sha256": "ac10c8d789113037a5bf1fbcdbe463c72d59c0e738d4fa521f448beaf1ee272a",
+      "install_path": "/Users/myronmosaad/.mojo/packages/tcp/1.0.5"
     },
     {
       "name": "tls",
-      "version": "1.0.2",
-      "source_url": "https://github.com/Mosaad-M/tls/archive/v1.0.2.tar.gz",
-      "sha256": "bb06949c8799965f292b0d0ef4ea49750e1043db76cd92cedbdcdebf0601c09b",
-      "install_path": "/home/mmosaad/.mojo/packages/tls/1.0.2"
+      "version": "1.3.2",
+      "source_url": "https://github.com/Mosaad-M/tls/archive/refs/tags/v1.3.2.tar.gz",
+      "sha256": "65e3f6f5f41fa08eb4c9a5dfeda05a589e4a517c9e1adbc31c1a709a5cf89be9",
+      "install_path": "/Users/myronmosaad/.mojo/packages/tls/1.3.2"
     }
   ]
 }
