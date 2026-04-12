@@ -14,7 +14,7 @@ from pg import _sha256, _hmac_sha256, _b64_encode, _b64_decode, _pbkdf2_sha256
 # Test helpers
 # ============================================================================
 
-alias CONNINFO = "host=localhost port=15432 dbname=mojo_test"
+comptime CONNINFO = "host=localhost port=15432 dbname=mojo_test"
 
 
 def assert_true(cond: Bool, label: String) raises:
