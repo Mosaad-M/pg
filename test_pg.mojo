@@ -14,7 +14,7 @@ from pg import _sha256, _hmac_sha256, _b64_encode, _b64_decode, _pbkdf2_sha256
 # Test helpers
 # ============================================================================
 
-alias CONNINFO = "host=localhost port=15432 dbname=mojo_test"
+comptime CONNINFO = "host=localhost port=15432 dbname=mojo_test"
 
 
 def assert_true(cond: Bool, label: String) raises:
@@ -371,11 +371,10 @@ def main() raises:
     var passed = 0
     var failed = 0
 
-    def run_test(
+    def run_test[test_fn: def() thin raises -> None](
         name: String,
         mut passed: Int,
         mut failed: Int,
-        test_fn: def () raises -> None,
     ):
         try:
             test_fn()
@@ -389,23 +388,23 @@ def main() raises:
     print("(connecting to localhost:15432/mojo_test)")
     print()
 
-    run_test("connect", passed, failed, test_connect)
-    run_test("bad conninfo", passed, failed, test_connect_bad_conninfo)
-    run_test("SELECT 1", passed, failed, test_select_one)
-    run_test("create/insert/query/drop", passed, failed, test_create_insert_query_drop)
-    run_test("null values", passed, failed, test_null_values)
-    run_test("multiple queries", passed, failed, test_multiple_queries)
-    run_test("bad query", passed, failed, test_bad_query)
-    run_test("multi-row query", passed, failed, test_multi_row_query)
-    run_test("data types", passed, failed, test_data_types)
-    run_test("sslmode parsed", passed, failed, test_sslmode_parsed)
-    run_test("exec_params", passed, failed, test_exec_params)
-    run_test("sha256 vectors", passed, failed, test_sha256_vectors)
-    run_test("b64 roundtrip", passed, failed, test_b64_roundtrip)
-    run_test("exec_pipeline 3 inserts + SELECT", passed, failed, test_exec_pipeline)
-    run_test("exec_pipeline empty",              passed, failed, test_exec_pipeline_empty)
-    run_test("exec_pipeline single query",       passed, failed, test_exec_pipeline_single)
-    run_test("exec_pipeline error in middle",    passed, failed, test_exec_pipeline_error_middle)
+    run_test[test_connect]("connect", passed, failed)
+    run_test[test_connect_bad_conninfo]("bad conninfo", passed, failed)
+    run_test[test_select_one]("SELECT 1", passed, failed)
+    run_test[test_create_insert_query_drop]("create/insert/query/drop", passed, failed)
+    run_test[test_null_values]("null values", passed, failed)
+    run_test[test_multiple_queries]("multiple queries", passed, failed)
+    run_test[test_bad_query]("bad query", passed, failed)
+    run_test[test_multi_row_query]("multi-row query", passed, failed)
+    run_test[test_data_types]("data types", passed, failed)
+    run_test[test_sslmode_parsed]("sslmode parsed", passed, failed)
+    run_test[test_exec_params]("exec_params", passed, failed)
+    run_test[test_sha256_vectors]("sha256 vectors", passed, failed)
+    run_test[test_b64_roundtrip]("b64 roundtrip", passed, failed)
+    run_test[test_exec_pipeline]("exec_pipeline 3 inserts + SELECT", passed, failed)
+    run_test[test_exec_pipeline_empty]("exec_pipeline empty", passed, failed)
+    run_test[test_exec_pipeline_single]("exec_pipeline single query", passed, failed)
+    run_test[test_exec_pipeline_error_middle]("exec_pipeline error in middle", passed, failed)
 
     print()
     print(

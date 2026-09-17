@@ -19,7 +19,7 @@
 # ============================================================================
 
 from std.ffi import external_call
-from std.memory.unsafe_pointer import alloc, UnsafePointer
+from std.memory import alloc
 from tcp import TcpSocket
 from tls.socket import TlsSocket, load_system_ca_bundle
 
@@ -419,7 +419,7 @@ def _hmac_sha256(key: List[UInt8], data: List[UInt8]) -> List[UInt8]:
         outer.append(k[i] ^ 0x5C)
     for i in range(32):
         outer.append(inner_hash[i])
-    return _sha256(outer)^
+    return _sha256(outer)
 
 
 def _pbkdf2_sha256(
@@ -524,14 +524,14 @@ def _random_bytes(n: Int) -> List[UInt8]:
     # Read monotonic clock (16 bytes: int64 tv_sec + int64 tv_nsec)
     var ts = alloc[UInt8](16)
     for i in range(16):
-        (ts + i)[] = 0
+        ts[unsafe_offset=i] = 0
     _ = external_call["clock_gettime", Int32](Int32(1), ts)  # CLOCK_MONOTONIC=1
     var pid = external_call["getpid", Int32]()
     # Seed: clock bytes + PID bytes
     var seed = List[UInt8](capacity=20)
     for i in range(16):
-        seed.append((ts + i)[])
-    ts.free()
+        seed.append(ts[unsafe_offset=i])
+    ts.unsafe_free()
     seed.append(UInt8(Int(pid) & 0xFF))
     seed.append(UInt8((Int(pid) >> 8) & 0xFF))
     seed.append(UInt8((Int(pid) >> 16) & 0xFF))
@@ -561,18 +561,18 @@ def _get_os_user() -> String:
     var kb = key.as_bytes()
     var n = len(kb)
     var kbuf = alloc[UInt8](n + 1)
-    for i in range(n): (kbuf + i)[] = kb[i]
-    (kbuf + n)[] = 0
+    for i in range(n): kbuf[unsafe_offset=i] = kb[i]
+    kbuf[unsafe_offset=n] = 0
     var ptr = external_call["getenv", Int](Int(kbuf))
-    kbuf.free()
+    kbuf.unsafe_free()
     if ptr == 0:
         return String("postgres")
     var length = external_call["strlen", Int](ptr)
     var vbuf = alloc[UInt8](length)
     _ = external_call["memcpy", Int](Int(vbuf), ptr, length)
     var bytes = List[UInt8](capacity=length)
-    for i in range(length): bytes.append((vbuf + i)[])
-    vbuf.free()
+    for i in range(length): bytes.append(vbuf[unsafe_offset=i])
+    vbuf.unsafe_free()
     return String(unsafe_from_utf8=bytes^)
 
 
@@ -595,13 +595,13 @@ struct ConnParams(Movable):
         self.password = String("")
         self.sslmode = String("disable")
 
-    def __moveinit__(out self, deinit take: Self):
-        self.host = take.host^
-        self.port = take.port
-        self.dbname = take.dbname^
-        self.user = take.user^
-        self.password = take.password^
-        self.sslmode = take.sslmode^
+    def __init__(out self, *, deinit move: Self):
+        self.host = move.host^
+        self.port = move.port
+        self.dbname = move.dbname^
+        self.user = move.user^
+        self.password = move.password^
+        self.sslmode = move.sslmode^
 
 
 def _parse_conninfo(conninfo: String) raises -> ConnParams:
@@ -693,7 +693,7 @@ struct PgResult(Copyable, Movable):
         self._ncols = 0
         self.error = String("")
 
-    def __copyinit__(out self, copy: Self):
+    def __init__(out self, *, copy: Self):
         self._names = copy._names.copy()
         self._rows = copy._rows.copy()
         self._nulls = copy._nulls.copy()
@@ -701,13 +701,13 @@ struct PgResult(Copyable, Movable):
         self._ncols = copy._ncols
         self.error = copy.error
 
-    def __moveinit__(out self, deinit take: Self):
-        self._names = take._names^
-        self._rows = take._rows^
-        self._nulls = take._nulls^
-        self._nrows = take._nrows
-        self._ncols = take._ncols
-        self.error = take.error^
+    def __init__(out self, *, deinit move: Self):
+        self._names = move._names^
+        self._rows = move._rows^
+        self._nulls = move._nulls^
+        self._nrows = move._nrows
+        self._ncols = move._ncols
+        self.error = move.error^
 
     def num_rows(self) -> Int:
         """Number of rows in result."""
@@ -771,11 +771,11 @@ struct PgConnection(Movable):
         self._use_tls = False
         self._connected = False
 
-    def __moveinit__(out self, deinit take: Self):
-        self._tcp = take._tcp^
-        self._tls = take._tls^
-        self._use_tls = take._use_tls
-        self._connected = take._connected
+    def __init__(out self, *, deinit move: Self):
+        self._tcp = move._tcp^
+        self._tls = move._tls^
+        self._use_tls = move._use_tls
+        self._connected = move._connected
 
     # -------------------------------------------------------------------------
     # Internal: raw I/O
@@ -797,17 +797,17 @@ struct PgConnection(Movable):
             return
         var buf = alloc[UInt8](n)
         for i in range(n):
-            (buf + i)[] = data[i]
+            buf[unsafe_offset=i] = data[i]
         var sent_total = 0
         while sent_total < n:
             var sent = external_call["send", Int](
-                self._tcp.fd, Int(buf + sent_total), n - sent_total, Int32(0)
+                self._tcp.fd, Int(buf.unsafe_offset(sent_total)), n - sent_total, Int32(0)
             )
             if sent <= 0:
-                buf.free()
+                buf.unsafe_free()
                 raise Error("pg: send failed")
             sent_total += sent
-        buf.free()
+        buf.unsafe_free()
 
     def _recv_msg(mut self) raises -> Tuple[UInt8, List[UInt8]]:
         """Read one backend message: (type_byte, body_bytes).
@@ -1100,7 +1100,7 @@ struct PgConnection(Movable):
                 iterations = Int(sf_val)
             pos = eq + 1  # skip ','
 
-        if len(server_nonce) == 0 or len(salt_b64) == 0:
+        if server_nonce.byte_length() == 0 or salt_b64.byte_length() == 0:
             raise Error("pg: SCRAM: malformed server-first: " + server_first)
 
         # Verify server nonce starts with our client nonce
