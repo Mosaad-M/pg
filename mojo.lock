@@ -10,10 +10,10 @@
     },
     {
       "name": "tls",
-      "version": "1.4.1",
-      "source_url": "https://github.com/Mosaad-M/tls/archive/refs/tags/v1.4.1.tar.gz",
-      "sha256": "f7bdfb019707dffa34a44316eeae3fb1f0c3f9199d42ca5b4eafc791c5a34c28",
-      "install_path": "/Users/myronmosaad/.mojo/packages/tls/1.4.1"
+      "version": "1.4.2",
+      "source_url": "https://github.com/Mosaad-M/tls/archive/refs/tags/v1.4.2.tar.gz",
+      "sha256": "ff36cd90175f9f9763313dc0dc43ff39f257c3ee3fc039bb1e36c177b1338075",
+      "install_path": "/Users/myronmosaad/.mojo/packages/tls/1.4.2"
     }
   ]
 }
