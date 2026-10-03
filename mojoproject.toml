@@ -1,6 +1,6 @@
 [package]
 name = "pg"
-version = "1.5.0"
+version = "1.5.1"
 description = "Pure-Mojo PostgreSQL client (wire protocol v3, SCRAM-SHA-256 auth, no libpq)"
 license = "MIT"
 platforms = ["linux-64", "osx-arm64"]
@@ -10,4 +10,4 @@ requires = ">=1.0.0"
 
 [dependencies]
 tcp = { git = "Mosaad-M/tcp", version = ">=1.1.0" }
-tls = { git = "Mosaad-M/tls", version = ">=1.4.0" }
+tls = { git = "Mosaad-M/tls", version = ">=1.4.3" }
