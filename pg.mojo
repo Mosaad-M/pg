@@ -19,9 +19,11 @@
 # ============================================================================
 
 from std.ffi import external_call
+from std.os import getenv
 from std.memory import alloc
 from tcp import TcpSocket
 from tls.socket import TlsSocket, load_system_ca_bundle
+from crypto.random import csprng_bytes
 
 
 # ============================================================================
@@ -515,41 +517,6 @@ def _b64_decode(s: String) -> List[UInt8]:
     return out^
 
 
-def _random_bytes(n: Int) -> List[UInt8]:
-    """Generate n pseudo-random bytes from clock_gettime + PID + SHA-256.
-
-    Sufficient for SCRAM nonces: security is guaranteed by the server's
-    additional random contribution to the combined nonce.
-    """
-    # Read monotonic clock (16 bytes: int64 tv_sec + int64 tv_nsec)
-    var ts = alloc[UInt8](16)
-    for i in range(16):
-        ts[unsafe_offset=i] = 0
-    _ = external_call["clock_gettime", Int32](Int32(1), ts)  # CLOCK_MONOTONIC=1
-    var pid = external_call["getpid", Int32]()
-    # Seed: clock bytes + PID bytes
-    var seed = List[UInt8](capacity=20)
-    for i in range(16):
-        seed.append(ts[unsafe_offset=i])
-    ts.unsafe_free()
-    seed.append(UInt8(Int(pid) & 0xFF))
-    seed.append(UInt8((Int(pid) >> 8) & 0xFF))
-    seed.append(UInt8((Int(pid) >> 16) & 0xFF))
-    seed.append(UInt8((Int(pid) >> 24) & 0xFF))
-    # Expand to n bytes via iterated SHA-256
-    var result = List[UInt8](capacity=n)
-    var counter = 0
-    while len(result) < n:
-        var ext = seed.copy()
-        ext.append(UInt8(counter & 0xFF))
-        var hash = _sha256(ext)
-        for i in range(len(hash)):
-            if len(result) < n:
-                result.append(hash[i])
-        counter += 1
-    return result^
-
-
 # ============================================================================
 # Connection string parser
 # ============================================================================
@@ -557,23 +524,7 @@ def _random_bytes(n: Int) -> List[UInt8]:
 
 def _get_os_user() -> String:
     """Return the current OS username from the USER environment variable."""
-    var key = String("USER")
-    var kb = key.as_bytes()
-    var n = len(kb)
-    var kbuf = alloc[UInt8](n + 1)
-    for i in range(n): kbuf[unsafe_offset=i] = kb[i]
-    kbuf[unsafe_offset=n] = 0
-    var ptr = external_call["getenv", Int](Int(kbuf))
-    kbuf.unsafe_free()
-    if ptr == 0:
-        return String("postgres")
-    var length = external_call["strlen", Int](ptr)
-    var vbuf = alloc[UInt8](length)
-    _ = external_call["memcpy", Int](Int(vbuf), ptr, length)
-    var bytes = List[UInt8](capacity=length)
-    for i in range(length): bytes.append(vbuf[unsafe_offset=i])
-    vbuf.unsafe_free()
-    return String(unsafe_from_utf8=bytes^)
+    return getenv("USER", "postgres")
 
 
 struct ConnParams(Movable):
@@ -1027,8 +978,9 @@ struct PgConnection(Movable):
         if not found_scram:
             raise Error("pg: SCRAM-SHA-256 not offered by server")
 
-        # Generate client nonce (18 random bytes → base64)
-        var nonce_raw = _random_bytes(18)
+        # Client nonce: 18 bytes from the OS CSPRNG, base64 (RFC 5802 §5.1
+        # requires it to be unpredictable; before 1.6.0 it was clock + PID)
+        var nonce_raw = csprng_bytes(18)
         var client_nonce = _b64_encode(nonce_raw)
 
         # client-first-message
