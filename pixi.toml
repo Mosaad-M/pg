@@ -11,6 +11,8 @@ stop-db = "pg_ctl -D .pgdata stop 2>/dev/null; true"
 test = { cmd = "bash -c 'bash build_and_run.sh test_pg.mojo; RET=$?; exit $RET'", depends-on = ["start-db"] }
 format = "mblack pg.mojo test_pg.mojo"
 
+test-std-compat = "bash build_and_run.sh test_std_compat.mojo"
+
 [dependencies]
 mojo = ">=1.0.0"
 postgresql = "*"
