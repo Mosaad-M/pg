@@ -18,9 +18,7 @@
 #
 # ============================================================================
 
-from std.ffi import external_call
 from std.os import getenv
-from std.memory import alloc
 from tcp import TcpSocket
 from tls.socket import TlsSocket, load_system_ca_bundle
 from crypto.random import csprng_bytes
@@ -743,22 +741,13 @@ struct PgConnection(Movable):
                 var n = self._tls.send(chunk)
                 sent += n
             return
-        var n = len(data)
-        if n == 0:
+        if len(data) == 0:
             return
-        var buf = alloc[UInt8](n)
-        for i in range(n):
-            buf[unsafe_offset=i] = data[i]
-        var sent_total = 0
-        while sent_total < n:
-            var sent = external_call["send", Int](
-                self._tcp.fd, Int(buf.unsafe_offset(sent_total)), n - sent_total, Int32(0)
-            )
-            if sent <= 0:
-                buf.unsafe_free()
-                raise Error("pg: send failed")
-            sent_total += sent
-        buf.unsafe_free()
+        # tcp sends everything (or raises) and never raises SIGPIPE
+        try:
+            _ = self._tcp.send_bytes(data)
+        except e:
+            raise Error("pg: send failed: " + String(e))
 
     def _recv_msg(mut self) raises -> Tuple[UInt8, List[UInt8]]:
         """Read one backend message: (type_byte, body_bytes).
@@ -1204,7 +1193,7 @@ struct PgConnection(Movable):
         conn._tcp.connect(params.host, params.port)
         if params.sslmode == "require" or params.sslmode == "verify-full":
             var cas = load_system_ca_bundle()
-            conn._tls = TlsSocket(conn._tcp.fd)
+            conn._tls = TlsSocket(conn._tcp.detach())
             conn._tls.connect(params.host, cas)
             conn._use_tls = True
         conn._connected = True
