@@ -39,6 +39,10 @@ comptime MSG_ERROR: UInt8 = 69         # 'E'
 comptime MSG_NOTICE: UInt8 = 78        # 'N'
 comptime MSG_EMPTY_QUERY: UInt8 = 73   # 'I'
 
+# Largest backend message body accepted: PostgreSQL's MaxAllocSize (1 GB).
+# The length comes from the server, so it is checked before anything is read.
+comptime MAX_MESSAGE_BYTES = 1 << 30
+
 
 # ============================================================================
 # Big-endian byte helpers
@@ -520,6 +524,18 @@ def _b64_decode(s: String) -> List[UInt8]:
 # ============================================================================
 
 
+def _check_body_len(length: Int) raises -> Int:
+    """Body length of a backend message from its 4-byte length field (which
+    counts itself). Raises on negative or oversized lengths: a hostile server
+    could otherwise make the client reserve gigabytes."""
+    var body_len = length - 4
+    if body_len < 0:
+        raise Error("pg: invalid message length: " + String(length))
+    if body_len > MAX_MESSAGE_BYTES:
+        raise Error("pg: message too large (" + String(body_len) + " bytes)")
+    return body_len
+
+
 def _get_os_user() -> String:
     """Return the current OS username from the USER environment variable."""
     return getenv("USER", "postgres")
@@ -761,9 +777,7 @@ struct PgConnection(Movable):
             header = self._tcp.recv_bytes_exact(5)
         var msg_type = header[0]
         var length = Int(_read_i32(header, 1))
-        var body_len = length - 4
-        if body_len < 0:
-            raise Error("pg: invalid message length: " + String(length))
+        var body_len = _check_body_len(length)
         var body = List[UInt8]()
         if body_len > 0:
             if self._use_tls:

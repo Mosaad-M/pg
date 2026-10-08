@@ -8,6 +8,7 @@
 
 from pg import PgConnection, PgResult
 from pg import _sha256, _hmac_sha256, _b64_encode, _b64_decode, _pbkdf2_sha256
+from pg import _check_body_len, MAX_MESSAGE_BYTES
 
 
 # ============================================================================
@@ -235,6 +236,22 @@ def test_exec_params() raises:
     conn.close()
 
 
+def test_message_length_cap() raises:
+    """Server-supplied message lengths: negative and > 1 GiB are rejected
+    before anything is read (1.7.0 accepted up to 2 GiB)."""
+    assert_int_eq(_check_body_len(4), 0, "empty body")
+    assert_int_eq(_check_body_len(100), 96, "normal body")
+    assert_int_eq(_check_body_len(MAX_MESSAGE_BYTES + 4), MAX_MESSAGE_BYTES, "largest allowed")
+    for bad in [3, -1, MAX_MESSAGE_BYTES + 5, 0x7FFFFFFF]:
+        var raised = False
+        try:
+            _ = _check_body_len(bad)
+        except:
+            raised = True
+        if not raised:
+            raise Error("length " + String(bad) + " accepted")
+
+
 def test_sha256_vectors() raises:
     """SHA-256 known test vectors (FIPS 180-4)."""
     # SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -388,6 +405,7 @@ def main() raises:
     print("(connecting to localhost:15432/mojo_test)")
     print()
 
+    run_test[test_message_length_cap]("message length cap (1 GiB)", passed, failed)
     run_test[test_connect]("connect", passed, failed)
     run_test[test_connect_bad_conninfo]("bad conninfo", passed, failed)
     run_test[test_select_one]("SELECT 1", passed, failed)
