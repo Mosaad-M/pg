@@ -3,10 +3,10 @@
   "packages": [
     {
       "name": "tcp",
-      "version": "2.0.0",
-      "source_url": "https://github.com/Mosaad-M/tcp/archive/refs/tags/v2.0.0.tar.gz",
-      "sha256": "b2be79210d37aa68b3fedc78c555e319e575230fc45f7042f18c37d2b98bb6c5",
-      "install_path": "/Users/myronmosaad/.mojo/packages/tcp/2.0.0"
+      "version": "2.0.1",
+      "source_url": "https://github.com/Mosaad-M/tcp/archive/refs/tags/v2.0.1.tar.gz",
+      "sha256": "d2f891c7555ba0516b316ef73f8a02ca2ea3e1c27d855f3ec283f241be009343",
+      "install_path": "/Users/myronmosaad/.mojo/packages/tcp/2.0.1"
     },
     {
       "name": "tls",
