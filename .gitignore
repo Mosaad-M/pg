@@ -6,3 +6,5 @@
 .pixi/
 __pycache__/
 tcp.mojo
+.mojo_flags
+.s.PGSQL.*.lock
