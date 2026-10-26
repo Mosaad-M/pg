@@ -1,6 +1,6 @@
 [package]
 name = "pg"
-version = "1.7.1"
+version = "1.8.0"
 description = "Pure-Mojo PostgreSQL client (wire protocol v3, SCRAM-SHA-256 auth, no libpq)"
 license = "MIT"
 platforms = ["linux-64", "osx-arm64"]
