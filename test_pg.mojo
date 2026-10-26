@@ -196,7 +196,7 @@ def test_data_types() raises:
 
 
 def test_exec_params() raises:
-    """exec_params() with $1/$2 placeholders avoids SQL injection."""
+    """Verify exec_params() with $1/$2 placeholders avoids SQL injection."""
     var conn = PgConnection.connect(CONNINFO)
 
     # Create table (drop first for idempotency)
@@ -275,7 +275,7 @@ def test_sha256_vectors() raises:
 
 
 def test_b64_roundtrip() raises:
-    """base64 encode then decode returns original bytes."""
+    """Verify base64 encode then decode returns original bytes."""
     var data = List[UInt8]()
     for i in range(16):
         data.append(UInt8(i))
@@ -294,11 +294,11 @@ def _hex_encode_test(data: List[UInt8]) -> String:
         var b = Int(data[i])
         out.append(hc[(b >> 4) & 0xF])
         out.append(hc[b & 0xF])
-    return String(unsafe_from_utf8=out^)
+    return String(unsafe_from_utf8=out)
 
 
 def test_sslmode_parsed() raises:
-    """sslmode=require triggers TLS code path; fails on non-TLS server."""
+    """Verify sslmode=require triggers TLS code path; fails on non-TLS server."""
     var got_error = False
     try:
         var conn = PgConnection.connect(
