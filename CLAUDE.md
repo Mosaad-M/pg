@@ -53,4 +53,4 @@ conn.close()    # Close connection
 
 - `libpq` from conda-forge (installed via pixi)
 - `postgresql` from conda-forge (for test DB server)
-- `mojo >=0.26.1`
+- `mojo >=1.2.0`

@@ -14,5 +14,5 @@ format = "mblack pg.mojo test_pg.mojo"
 test-std-compat = "bash build_and_run.sh test_std_compat.mojo"
 
 [dependencies]
-mojo = ">=1.0.0"
+mojo = ">=1.2.0"
 postgresql = "*"

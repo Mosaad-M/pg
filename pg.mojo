@@ -99,7 +99,7 @@ def _read_cstr(buf: List[UInt8], offset: Int) -> Tuple[String, Int]:
     var bytes = List[UInt8](capacity=length)
     for i in range(offset, end):
         bytes.append(buf[i])
-    var s = String(unsafe_from_utf8=bytes^)
+    var s = String(unsafe_from_utf8=bytes)
     return (s^, end + 1)
 
 
@@ -199,8 +199,8 @@ def _md5(data: List[UInt8]) -> List[UInt8]:
         var D = d0
 
         for i in range(64):
-            var F: UInt32 = 0
-            var g: Int = 0
+            var F: UInt32
+            var g: Int
             if i < 16:
                 F = (B & C) | ((~B) & D)
                 g = i
@@ -231,7 +231,7 @@ def _md5(data: List[UInt8]) -> List[UInt8]:
     # Output: 4 words in little-endian byte order = 16 bytes
     var digest = List[UInt8](capacity=16)
     for w_idx in range(4):
-        var word: UInt32 = 0
+        var word: UInt32
         if w_idx == 0:
             word = a0
         elif w_idx == 1:
@@ -258,7 +258,7 @@ def _hex_encode(data: List[UInt8]) -> String:
         var b = Int(data[i])
         out.append(hc[(b >> 4) & 0xF])
         out.append(hc[b & 0xF])
-    return String(unsafe_from_utf8=out^)
+    return String(unsafe_from_utf8=out)
 
 
 def _md5_hex(data: List[UInt8]) -> String:
@@ -379,7 +379,7 @@ def _sha256(data: List[UInt8]) -> List[UInt8]:
     # Output 32 big-endian bytes
     var digest = List[UInt8](capacity=32)
     for wi in range(8):
-        var w: UInt32 = 0
+        var w: UInt32
         if wi == 0: w = h0
         elif wi == 1: w = h1
         elif wi == 2: w = h2
@@ -481,7 +481,7 @@ def _b64_encode(data: List[UInt8]) -> String:
         out.append(chars[((b0 & 0x3) << 4) | ((b1 >> 4) & 0xF)])
         out.append(chars[(b1 & 0xF) << 2])
         out.append(UInt8(ord("=")))
-    return String(unsafe_from_utf8=out^)
+    return String(unsafe_from_utf8=out)
 
 
 def _b64_char_val(c: UInt8) -> Int:
@@ -590,7 +590,7 @@ def _parse_conninfo(conninfo: String) raises -> ConnParams:
         var key_bytes = List[UInt8]()
         for j in range(key_start, i):
             key_bytes.append(sb[j])
-        var key = String(unsafe_from_utf8=key_bytes^)
+        var key = String(unsafe_from_utf8=key_bytes)
 
         if i >= n or sb[i] != UInt8(61):  # '='
             break
@@ -611,7 +611,7 @@ def _parse_conninfo(conninfo: String) raises -> ConnParams:
             while i < n and sb[i] != UInt8(32) and sb[i] != UInt8(9) and sb[i] != UInt8(10):
                 value_bytes.append(sb[i])
                 i += 1
-        var value = String(unsafe_from_utf8=value_bytes^)
+        var value = String(unsafe_from_utf8=value_bytes)
 
         if key == "host":
             params.host = value^
@@ -948,7 +948,7 @@ struct PgConnection(Movable):
                 var msg_bytes = List[UInt8]()
                 for j in range(start, i):
                     msg_bytes.append(body[j])
-                return String(unsafe_from_utf8=msg_bytes^)
+                return String(unsafe_from_utf8=msg_bytes)
             i += 1  # skip null
         return String("unknown error")
 
@@ -974,7 +974,7 @@ struct PgConnection(Movable):
                 var mb = List[UInt8]()
                 for j in range(i, mend):
                     mb.append(body[j])
-                if String(unsafe_from_utf8=mb^) == "SCRAM-SHA-256":
+                if String(unsafe_from_utf8=mb) == "SCRAM-SHA-256":
                     found_scram = True
             i = mend + 1
 
@@ -1020,7 +1020,7 @@ struct PgConnection(Movable):
         var sf_bytes = List[UInt8]()
         for k in range(4, len(b2)):
             sf_bytes.append(b2[k])
-        var server_first = String(unsafe_from_utf8=sf_bytes^)
+        var server_first = String(unsafe_from_utf8=sf_bytes)
 
         var server_nonce = String("")
         var salt_b64 = String("")
@@ -1038,7 +1038,7 @@ struct PgConnection(Movable):
             var kb = List[UInt8]()
             for k in range(pos, eq):
                 kb.append(sf_raw[k])
-            var sf_key = String(unsafe_from_utf8=kb^)
+            var sf_key = String(unsafe_from_utf8=kb)
             eq += 1
             var vs = eq
             while eq < sf_n and sf_raw[eq] != UInt8(ord(",")):
@@ -1046,7 +1046,7 @@ struct PgConnection(Movable):
             var vb = List[UInt8]()
             for k in range(vs, eq):
                 vb.append(sf_raw[k])
-            var sf_val = String(unsafe_from_utf8=vb^)
+            var sf_val = String(unsafe_from_utf8=vb)
             if sf_key == "r":
                 server_nonce = sf_val^
             elif sf_key == "s":
@@ -1123,13 +1123,13 @@ struct PgConnection(Movable):
         var sf_final_b = List[UInt8]()
         for k in range(4, len(b3)):
             sf_final_b.append(b3[k])
-        var server_final = String(unsafe_from_utf8=sf_final_b^)
+        var server_final = String(unsafe_from_utf8=sf_final_b)
         var sf_raw2 = server_final.as_bytes()
         if len(sf_raw2) > 2 and sf_raw2[0] == UInt8(ord("v")) and sf_raw2[1] == UInt8(ord("=")):
             var sig_b = List[UInt8]()
             for k in range(2, len(sf_raw2)):
                 sig_b.append(sf_raw2[k])
-            var actual_sig = String(unsafe_from_utf8=sig_b^)
+            var actual_sig = String(unsafe_from_utf8=sig_b)
             if actual_sig != expected_server_sig:
                 raise Error("pg: SCRAM: server signature verification failed")
 
@@ -1276,7 +1276,7 @@ struct PgConnection(Movable):
                         for k in range(col_len):
                             val_bytes.append(body[offset + k])
                         offset += col_len
-                        row_vals.append(String(unsafe_from_utf8=val_bytes^))
+                        row_vals.append(String(unsafe_from_utf8=val_bytes))
                         row_nulls.append(False)
                 result._rows.append(row_vals^)
                 result._nulls.append(row_nulls^)
@@ -1369,7 +1369,7 @@ struct PgConnection(Movable):
                         for k in range(col_len):
                             val_bytes.append(body[offset + k])
                         offset += col_len
-                        row_vals.append(String(unsafe_from_utf8=val_bytes^))
+                        row_vals.append(String(unsafe_from_utf8=val_bytes))
                         row_nulls.append(False)
                 result._rows.append(row_vals^)
                 result._nulls.append(row_nulls^)
@@ -1474,7 +1474,7 @@ struct PgConnection(Movable):
                             for k in range(col_len):
                                 val_bytes.append(body[offset + k])
                             offset += col_len
-                            row_vals.append(String(unsafe_from_utf8=val_bytes^))
+                            row_vals.append(String(unsafe_from_utf8=val_bytes))
                             row_nulls.append(False)
                     current._rows.append(row_vals^)
                     current._nulls.append(row_nulls^)
